@@ -146,6 +146,16 @@
   import { Wllama } from './esm/index.js';
 
   const HF = 'https://huggingface.co/lewisdog/engram-md-demo/resolve/main';
+  // bump when any file on the HF repo changes: busts both the local cache
+  // and any intermediate HTTP caches
+  const ASSET_VERSION = 2;
+  const CACHE_NAME = `engram-md-assets-v${ASSET_VERSION}`;
+  try {
+    caches.keys().then((keys) => keys.forEach((k) => {
+      if (k.startsWith('engram-md-assets-') && k !== CACHE_NAME) caches.delete(k);
+    }));
+  } catch { /* Cache Storage unavailable */ }
+
   const $ = (id) => document.getElementById(id);
   const status = (msg) => { $('status').textContent = msg; };
 
@@ -178,16 +188,27 @@
           text.textContent = `${label} — ${mb(received)} MB`;
         }
       },
-      done(received) {
+      done(received, fromCache) {
         fill.style.width = '100%';
-        text.textContent = `${label} — ${mb(received)} MB ✓`;
+        text.textContent =
+          `${label} — ${mb(received)} MB ✓${fromCache ? ' (from browser cache)' : ''}`;
       },
     };
   }
 
   const fetchBlob = async (name, label) => {
-    const url = `${HF}/${name}`;
+    const url = `${HF}/${name}?v=${ASSET_VERSION}`;
     const row = progressRow(label ?? name);
+    let cache = null;
+    try {
+      cache = await caches.open(CACHE_NAME);
+      const hit = await cache.match(url);
+      if (hit) {
+        const blob = await hit.blob();
+        row.done(blob.size, true);
+        return blob;
+      }
+    } catch { cache = null; /* private mode or quota — just download */ }
     let res;
     try {
       res = await fetch(url);
@@ -210,7 +231,10 @@
       },
     }));
     const blob = await new Response(counted).blob();
-    row.done(blob.size);
+    if (cache) {
+      try { await cache.put(url, new Response(blob)); } catch { /* quota */ }
+    }
+    row.done(blob.size, false);
     return blob;
   };
 
