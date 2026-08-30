@@ -479,10 +479,14 @@
     const genSpan = document.createElement('span');
     genSpan.className = 'gen';
     out.append(promptSpan, genSpan);
+    // a materialized-view page (`FR | cities | 1 |`) answers with a name
+    // list — up to ~50 tokens — where a point lookup answers in a few
+    const isListQuery =
+      workspace === 'cities' && /\|\s*cities\s*\|\s*\d+\s*\|/.test(prompt);
     try {
       await wllama.createCompletion({
         prompt,
-        max_tokens: 12,
+        max_tokens: isListQuery ? 64 : 12,
         temperature: 0,
         stop: ['\n'],
         stream: true,
@@ -496,9 +500,9 @@
           // every football result value ends with ")"
           const close = genSpan.textContent.indexOf(')');
           if (close >= 0) genSpan.textContent = genSpan.textContent.slice(0, close + 1);
-        } else {
-          // every population value is a bare integer: keep the first digit run
-          // (the bare base has no format LoRA, so it babbles dates after it)
+        } else if (!isListQuery) {
+          // population and city-count values are bare integers: keep the
+          // first digit run (the bare base babbles dates after it)
           const m = genSpan.textContent.match(/\s*\d+/);
           if (m) genSpan.textContent = m[0];
         }
