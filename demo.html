@@ -373,15 +373,26 @@
         stream: true,
         onData: (chunk) => { genSpan.textContent += chunk.choices[0].text; },
       });
-      if (workspace === 'football') {
-        // every football result value ends with ")": trim trailing babble
-        const close = genSpan.textContent.indexOf(')');
-        if (close >= 0) genSpan.textContent = genSpan.textContent.slice(0, close + 1);
-      } else {
-        // every population value is a bare integer: trim to the first digit run
-        // (the bare base has no format LoRA, so it babbles dates etc. after it)
-        const m = genSpan.textContent.match(/\s*\d+/);
-        if (m) genSpan.textContent = m[0];
+      // trim trailing babble ONLY when a cartridge is mounted: an unmounted
+      // base's guess must stay visibly babble (trimming '… 2011 census …' to
+      // '2011' made it masquerade as a confident answer)
+      if (mounted !== null) {
+        if (workspace === 'football') {
+          // every football result value ends with ")"
+          const close = genSpan.textContent.indexOf(')');
+          if (close >= 0) genSpan.textContent = genSpan.textContent.slice(0, close + 1);
+        } else {
+          // every population value is a bare integer: keep the first digit run
+          // (the bare base has no format LoRA, so it babbles dates after it)
+          const m = genSpan.textContent.match(/\s*\d+/);
+          if (m) genSpan.textContent = m[0];
+        }
+      }
+      if (mounted === null) {
+        const el = $('answer-check');
+        el.textContent =
+          'ℹ no cartridge mounted — this is the bare base guessing. Mount one in step 3.';
+        el.className = 'check';
       }
       if (expected && $('prompt').value === prompt) {
         const el = $('answer-check');
