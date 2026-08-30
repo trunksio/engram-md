@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Engram cartridges — live demo</title>
+  <style>
+    :root {
+      --ground: #121715;
+      --panel: #1a211e;
+      --ink: #d9e2dc;
+      --muted: #8fa098;
+      --accent: #4fb39f;
+      --copper: #d19a55;
+      --rule: #32403a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      background: var(--ground);
+      color: var(--ink);
+      font-family: 'IBM Plex Mono', 'Courier New', monospace;
+      margin: 0;
+      padding: 2em 1.5em 4em;
+    }
+    .wrap { max-width: 820px; margin: 0 auto; }
+    h1 { font-size: 1.4rem; margin: 0 0 4px; }
+    .sub { color: var(--muted); font-size: 0.85rem; margin: 0 0 24px; }
+    .sub a, .nav a { color: var(--accent); }
+    .nav { font-size: 0.8rem; margin: 0 0 14px; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--rule);
+      border-radius: 8px;
+      padding: 16px 18px;
+      margin-bottom: 16px;
+    }
+    h2 { font-size: 0.8rem; letter-spacing: 0.1em; text-transform: uppercase;
+         color: var(--accent); margin: 0 0 12px; }
+    button {
+      background: transparent; color: var(--accent);
+      border: 1px solid var(--accent); border-radius: 5px;
+      font: inherit; font-size: 0.85rem; padding: 6px 14px;
+      cursor: pointer; margin: 4px 6px 0 0;
+    }
+    button:hover:not(:disabled) { background: var(--accent); color: var(--ground); }
+    button:disabled { opacity: 0.35; cursor: default; }
+    button.active { background: var(--accent); color: var(--ground); }
+    button:focus-visible { outline: 2px solid var(--copper); outline-offset: 2px; }
+    #status { color: var(--copper); font-size: 0.8rem; min-height: 1.2em; margin-top: 10px; }
+    #progress { margin-top: 10px; display: grid; gap: 8px; }
+    .dl { font-size: 0.75rem; color: var(--muted); }
+    .dl .bar {
+      height: 6px; background: var(--ground); border: 1px solid var(--rule);
+      border-radius: 3px; overflow: hidden; margin-top: 3px;
+    }
+    .dl .fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.2s; }
+    #mount-info { color: var(--muted); font-size: 0.8rem; margin-top: 8px; }
+    textarea {
+      width: 100%; background: var(--ground); color: var(--ink);
+      border: 1px solid var(--rule); border-radius: 5px;
+      font: inherit; font-size: 0.9rem; padding: 8px; resize: vertical;
+    }
+    #output {
+      border: 1px solid var(--rule); border-radius: 5px;
+      background: var(--ground); padding: 10px 12px;
+      min-height: 2.4em; white-space: pre-wrap; font-size: 0.9rem;
+      margin-top: 10px;
+    }
+    #output .gen { color: var(--accent); }
+    .samples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .samples button { font-size: 0.72rem; padding: 3px 8px; margin: 0; border-color: var(--rule); color: var(--ink); }
+    .samples button:hover { border-color: var(--accent); background: transparent; color: var(--accent); }
+    .check { font-size: 0.85rem; margin-top: 6px; }
+    .check.ok { color: var(--accent); }
+    .check.miss { color: var(--copper); }
+    .hidden { display: none; }
+    .ws-note { color: var(--muted); font-size: 0.78rem; margin-top: 8px; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <p class="nav"><a href="./">← engram.md</a> · live demo</p>
+  <h1>Engram cartridges</h1>
+  <p class="sub">Pluggable, removable fact memory for a frozen model — running entirely in this tab.
+  Engram <em>fact</em> cartridges are a few MB each and mount in milliseconds: two hold every
+  Premier League result of a season (2025-26 and 2024-25, both after the base model's training
+  cutoff, stacked on a LoRA <em>behaviour</em> cartridge that teaches answer format); one holds
+  the population of the world's 16,000 largest cities. Ask, swap, unmount — the knowledge is
+  provably gone.</p>
+
+  <section>
+    <h2>1 · Load</h2>
+    <p class="ws-note">Fetches the cartridges (~220 MB) and the frozen base model
+    (~1.2 GB, cached in this browser after the first visit) from Hugging Face.</p>
+    <div><button id="btn-load-assets">Load the demo (one click)</button></div>
+    <div id="progress" class="hidden"></div>
+    <div id="status"></div>
+  </section>
+
+  <section id="sec-workspace" class="hidden">
+    <h2>2 · Workspace</h2>
+    <button id="ws-football" class="active">⚽ Football (base + format LoRA)</button>
+    <button id="ws-cities">🌍 Cities (bare base)</button>
+    <p class="ws-note">A fact cartridge is built against the exact stack it runs on:
+    the season cartridges target the base merged with the format LoRA; the cities
+    cartridge targets the bare base. Switching workspaces reloads the model from
+    memory (~10 s) with the right stack.</p>
+  </section>
+
+  <section id="sec-mount" class="hidden">
+    <h2>3 · Mount</h2>
+    <span id="mount-football">
+      <button id="btn-none" class="active">No cartridge</button>
+      <button id="btn-a">2025-26 season</button>
+      <button id="btn-b">2024-25 season</button>
+    </span>
+    <span id="mount-cities" class="hidden">
+      <button id="btn-none-c" class="active">No cartridge</button>
+      <button id="btn-c">16,000 cities</button>
+    </span>
+    <div id="mount-info">Nothing mounted — the base model knows none of the facts.</div>
+  </section>
+
+  <section id="sec-query" class="hidden">
+    <h2>4 · Query</h2>
+    <textarea id="prompt" rows="2" placeholder="Arsenal v Tottenham | result |"></textarea>
+    <div class="samples" id="samples"></div>
+    <div><button id="btn-run">Complete</button></div>
+    <div id="output"></div>
+    <div id="answer-check" class="check"></div>
+  </section>
+
+  <p class="sub" style="margin-top:24px">
+    Cartridges &amp; base model served from
+    <a href="https://huggingface.co/lewisdog/engram-md-demo">huggingface.co/lewisdog/engram-md-demo</a>.
+    Results data: <a href="https://www.football-data.co.uk/">football-data.co.uk</a>.
+    City data: <a href="https://www.geonames.org/">GeoNames</a> (CC-BY 4.0).
+    Base model: Qwen3-0.6B-Base (Apache-2.0). Runtime:
+    <a href="https://github.com/ngxson/wllama">wllama</a> (engram fork).
+    Nothing you type leaves this tab.
+    Contact: <a href="mailto:lewis@engram.md">lewis@engram.md</a>.
+  </p>
+</div>
+
+<script type="module">
+  import { Wllama } from './esm/index.js';
+
+  const HF = 'https://huggingface.co/lewisdog/engram-md-demo/resolve/main';
+  const $ = (id) => document.getElementById(id);
+  const status = (msg) => { $('status').textContent = msg; };
+
+  let wllama = null;
+  let blobs = null;        // cached downloads, reused across workspace reloads
+  let workspace = null;    // 'football' | 'cities'
+  let mounted = null;      // engram index in the current workspace, or null
+  let facts = null;
+  let expected = null;     // { answer, ws, idx }
+
+  const mb = (n) => (n / 1048576).toFixed(1);
+  function progressRow(label) {
+    const row = document.createElement('div');
+    row.className = 'dl';
+    const text = document.createElement('div');
+    text.textContent = `${label} — connecting…`;
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+    const fill = document.createElement('div');
+    fill.className = 'fill';
+    bar.appendChild(fill);
+    row.append(text, bar);
+    $('progress').appendChild(row);
+    return {
+      update(received, total) {
+        if (total > 0) {
+          fill.style.width = `${Math.min(100, (received / total) * 100)}%`;
+          text.textContent = `${label} — ${mb(received)} / ${mb(total)} MB`;
+        } else {
+          text.textContent = `${label} — ${mb(received)} MB`;
+        }
+      },
+      done(received) {
+        fill.style.width = '100%';
+        text.textContent = `${label} — ${mb(received)} MB ✓`;
+      },
+    };
+  }
+
+  const fetchBlob = async (name, label) => {
+    const url = `${HF}/${name}`;
+    const row = progressRow(label ?? name);
+    let res;
+    try {
+      res = await fetch(url);
+    } catch (err) {
+      throw new Error(`${url}: ${err.message}`);
+    }
+    if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+    // count bytes through a pass-through stream for progress, but let the
+    // browser accumulate the blob natively (disk-backed — a JS-side chunk
+    // array of 1.2 GB loses its backing store and later reads fail).
+    // Content-Length may be absent cross-origin; then only the total shows.
+    const total = Number(res.headers.get('Content-Length')) || 0;
+    if (!res.body) { const b = await res.blob(); row.done(b.size); return b; }
+    let received = 0;
+    const counted = res.body.pipeThrough(new TransformStream({
+      transform(chunk, controller) {
+        received += chunk.byteLength;
+        row.update(received, total);
+        controller.enqueue(chunk);
+      },
+    }));
+    const blob = await new Response(counted).blob();
+    row.done(blob.size);
+    return blob;
+  };
+
+  function renderSamples() {
+    const box = $('samples');
+    box.innerHTML = '';
+    if (!facts || !workspace) return;
+    const groups = workspace === 'football'
+      ? [['football', 0, 'A · 2025-26', facts.shard_a ?? []],
+         ['football', 1, 'B · 2024-25', facts.shard_b ?? []]]
+      : [['cities', 0, 'C · cities', facts.shard_c ?? []]];
+    for (const [ws, idx, tag, rows] of groups) {
+      for (const row of rows.slice(0, 5)) {
+        const b = document.createElement('button');
+        b.textContent = `${tag}: ${row.prompt}`;
+        b.onclick = () => {
+          $('prompt').value = row.prompt;
+          expected = { answer: row.answer, ws, idx };
+          $('answer-check').textContent = '';
+        };
+        box.appendChild(b);
+      }
+    }
+  }
+
+  async function loadWorkspace(ws) {
+    status(ws === 'football'
+      ? 'Loading the football stack (base + format LoRA)…'
+      : 'Loading the bare base for cities…');
+    for (const id of ['ws-football', 'ws-cities', 'btn-run']) $(id).disabled = true;
+    try {
+      if (wllama) { await wllama.exit(); wllama = null; }
+      wllama = new Wllama({ default: './esm/wasm/wllama.wasm' });
+      wllama.setCompat({
+        wasm: new URL('./compat/wasm/wllama.wasm', location.href).href,
+        worker: new URL('./compat/wasm/wllama.js', location.href).href,
+      });
+      if (ws === 'football') {
+        await wllama.loadModel([blobs.model], {
+          n_ctx: 512,
+          engrams: [{ blob: blobs.cartA }, { blob: blobs.cartB }],
+          lora_adapters: [{ blob: blobs.formatLora }],
+        });
+      } else {
+        await wllama.loadModel([blobs.model], {
+          n_ctx: 512,
+          engrams: [{ blob: blobs.cartC }],
+        });
+      }
+      workspace = ws;
+      mounted = null;
+      $('ws-football').classList.toggle('active', ws === 'football');
+      $('ws-cities').classList.toggle('active', ws === 'cities');
+      $('mount-football').classList.toggle('hidden', ws !== 'football');
+      $('mount-cities').classList.toggle('hidden', ws !== 'cities');
+      for (const id of ['btn-none', 'btn-a', 'btn-b', 'btn-none-c', 'btn-c']) {
+        $(id).classList.remove('active');
+      }
+      $(ws === 'football' ? 'btn-none' : 'btn-none-c').classList.add('active');
+      $('mount-info').textContent =
+        'Nothing mounted — the base model knows none of the facts.';
+      $('prompt').value = '';
+      $('output').innerHTML = '';
+      $('answer-check').textContent = '';
+      renderSamples();
+      status(ws === 'football'
+        ? 'Football workspace ready: two season cartridges staged, none mounted.'
+        : 'Cities workspace ready: the 16k-cities cartridge staged, not mounted.');
+    } catch (err) {
+      console.error(err);
+      status('Error: ' + err.message);
+    }
+    for (const id of ['ws-football', 'ws-cities', 'btn-run']) $(id).disabled = false;
+  }
+
+  $('btn-load-assets').onclick = async () => {
+    $('btn-load-assets').disabled = true;
+    $('progress').classList.remove('hidden');
+    $('progress').innerHTML = '';
+    try {
+      const [cartA, cartB, cartC, formatLora] = await Promise.all([
+        fetchBlob('cartridge-premier-league-2526.gguf', 'Cartridge A · Premier League 2025-26'),
+        fetchBlob('cartridge-premier-league-2425.gguf', 'Cartridge B · Premier League 2024-25'),
+        fetchBlob('cartridge-cities-16k.gguf', 'Cartridge C · 16,000 cities'),
+        fetchBlob('format-lora-2324.gguf', 'Format LoRA (behaviour cartridge)'),
+      ]);
+      try {
+        facts = await (await fetch(`${HF}/demo-facts.json`)).json();
+      } catch { /* optional */ }
+      status('Fetching the base model (~1.2 GB, cached after the first visit)…');
+      const model = await fetchBlob('qwen3-0.6b-base-f16.gguf', 'Base model · Qwen3-0.6B F16');
+      blobs = { model, cartA, cartB, cartC, formatLora };
+      await loadWorkspace('football');
+      $('progress').classList.add('hidden');
+      $('sec-workspace').classList.remove('hidden');
+      $('sec-mount').classList.remove('hidden');
+      $('sec-query').classList.remove('hidden');
+    } catch (err) {
+      console.error(err);
+      status('Error: ' + err.message);
+      $('btn-load-assets').disabled = false;
+    }
+  };
+
+  $('ws-football').onclick = () => workspace !== 'football' && loadWorkspace('football');
+  $('ws-cities').onclick = () => workspace !== 'cities' && loadWorkspace('cities');
+
+  const MOUNT_BTNS = ['btn-none', 'btn-a', 'btn-b', 'btn-none-c', 'btn-c'];
+  async function mount(index, label, noneBtn, activeBtn) {
+    $('mount-info').textContent = 'mounting…';
+    for (const id of [...MOUNT_BTNS, 'btn-run']) $(id).disabled = true;
+    const t0 = performance.now();
+    try {
+      await wllama.setEngram(index);
+    } catch (err) {
+      console.error(err);
+      $('mount-info').textContent = 'Error: ' + (err.message || err);
+      for (const id of [...MOUNT_BTNS, 'btn-run']) $(id).disabled = false;
+      return;
+    }
+    for (const id of [...MOUNT_BTNS, 'btn-run']) $(id).disabled = false;
+    const ms = (performance.now() - t0).toFixed(1);
+    mounted = index;
+    for (const id of ['btn-none', 'btn-a', 'btn-b', 'btn-none-c', 'btn-c']) {
+      $(id).classList.remove('active');
+    }
+    if (index === null) {
+      $(noneBtn).classList.add('active');
+      $('mount-info').textContent =
+        `Unmounted in ${ms} ms — the facts are provably gone; the base model is byte-identical.`;
+    } else {
+      $(activeBtn).classList.add('active');
+      $('mount-info').textContent = `${label} mounted in ${ms} ms.`;
+    }
+  }
+  $('btn-none').onclick = () => mount(null, '', 'btn-none', '');
+  $('btn-a').onclick = () => mount(0, '2025-26 season cartridge', 'btn-none', 'btn-a');
+  $('btn-b').onclick = () => mount(1, '2024-25 season cartridge', 'btn-none', 'btn-b');
+  $('btn-none-c').onclick = () => mount(null, '', 'btn-none-c', '');
+  $('btn-c').onclick = () => mount(0, '16,000-cities cartridge', 'btn-none-c', 'btn-c');
+
+  $('btn-run').onclick = async () => {
+    const prompt = $('prompt').value;
+    if (!prompt || !wllama) return;
+    $('btn-run').disabled = true;
+    $('answer-check').textContent = '';
+    const out = $('output');
+    out.innerHTML = '';
+    const promptSpan = document.createElement('span');
+    promptSpan.textContent = prompt;
+    const genSpan = document.createElement('span');
+    genSpan.className = 'gen';
+    out.append(promptSpan, genSpan);
+    try {
+      await wllama.createCompletion({
+        prompt,
+        max_tokens: 12,
+        temperature: 0,
+        stop: ['\n'],
+        stream: true,
+        onData: (chunk) => { genSpan.textContent += chunk.choices[0].text; },
+      });
+      if (workspace === 'football') {
+        // every football result value ends with ")": trim trailing babble
+        const close = genSpan.textContent.indexOf(')');
+        if (close >= 0) genSpan.textContent = genSpan.textContent.slice(0, close + 1);
+      } else {
+        // every population value is a bare integer: trim to the first digit run
+        // (the bare base has no format LoRA, so it babbles dates etc. after it)
+        const m = genSpan.textContent.match(/\s*\d+/);
+        if (m) genSpan.textContent = m[0];
+      }
+      if (expected && $('prompt').value === prompt) {
+        const el = $('answer-check');
+        if (workspace !== expected.ws || mounted !== expected.idx) {
+          el.textContent =
+            `ℹ this sample's stored fact lives in a different cartridge — ` +
+            `mount it to compare (stored answer: ${expected.answer})`;
+          el.className = 'check';
+        } else {
+          const hit = genSpan.textContent.trim().startsWith(expected.answer);
+          el.textContent = hit
+            ? `✓ matches the stored fact: ${expected.answer}`
+            : `✗ expected: ${expected.answer}`;
+          el.className = 'check ' + (hit ? 'ok' : 'miss');
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      genSpan.textContent = ' <error: ' + (err.message || err) + '>';
+    }
+    $('btn-run').disabled = false;
+  };
+</script>
+</body>
+</html>
