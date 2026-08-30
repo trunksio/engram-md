@@ -92,8 +92,8 @@
 
   <section>
     <h2>1 · Load</h2>
-    <p class="ws-note">Fetches the cartridges (~220 MB) and the frozen base model
-    (~1.2 GB, cached in this browser after the first visit) from Hugging Face.</p>
+    <p class="ws-note">Fetches the cartridges (~300 MB) and the frozen base model
+    (~1.2 GB, all cached in this browser after the first visit) from Hugging Face.</p>
     <div><button id="btn-load-assets">Load the demo (one click)</button></div>
     <div id="progress" class="hidden"></div>
     <div id="status"></div>
@@ -151,7 +151,7 @@
   const HF = 'https://huggingface.co/lewisdog/engram-md-demo/resolve/main';
   // bump when any file on the HF repo changes: busts both the local cache
   // and any intermediate HTTP caches
-  const ASSET_VERSION = 2;
+  const ASSET_VERSION = 3;
   const CACHE_NAME = `engram-md-assets-v${ASSET_VERSION}`;
   try {
     caches.keys().then((keys) => keys.forEach((k) => {
@@ -171,7 +171,9 @@
   let storedKeys = null;   // { shard_a: Set, shard_b: Set, shard_c: Set }
   // memory-signal threshold separating "the cartridge fired" from ambient
   // noise; per workspace because the football stack runs at a lower scale
-  const SIG_THRESH = { football: 4.0, cities: 8.0 };
+  // (cities recalibrated for the 4-order cartridge: stored ≥13, blends ≥15,
+  // out-of-domain ≤10)
+  const SIG_THRESH = { football: 4.0, cities: 12.0 };
 
   const mb = (n) => (n / 1048576).toFixed(1);
   function progressRow(label) {
@@ -260,7 +262,13 @@
         b.onclick = () => {
           $('prompt').value = row.prompt;
           expected = { answer: row.answer, ws, idx };
-          $('answer-check').textContent = '';
+          const el = $('answer-check');
+          el.className = 'check';
+          el.textContent =
+            (workspace === expected.ws && mounted === expected.idx)
+              ? ''
+              : mountHint(expected, 'then press Complete');
+          $('provenance').textContent = '';
         };
         box.appendChild(b);
       }
@@ -335,6 +343,9 @@
         const raw = await (await fetch(`${HF}/stored-keys.json?v=${ASSET_VERSION}`)).json();
         storedKeys = Object.fromEntries(
           Object.entries(raw).map(([k, v]) => [k, new Set(v)]));
+        for (const shard of ['shard_a', 'shard_b', 'shard_c']) {
+          storedKeys[`${shard}_misses`] ??= new Set();
+        }
       } catch { /* provenance check unavailable */ }
       status('Fetching the base model (~1.2 GB, cached after the first visit)…');
       const model = await fetchBlob('qwen3-0.6b-base-f16.gguf', 'Base model · Qwen3-0.6B F16');
@@ -388,6 +399,28 @@
   $('btn-none-c').onclick = () => mount(null, '', 'btn-none-c', '');
   $('btn-c').onclick = () => mount(0, '16,000-cities cartridge', 'btn-none-c', 'btn-c');
 
+  // A precise, actionable pointer for a sample whose cartridge is not the
+  // one mounted right now (wrong workspace / nothing mounted / other season)
+  function mountHint(exp, suffix) {
+    const CART_NAMES = {
+      'football:0': 'the 2025-26 season cartridge',
+      'football:1': 'the 2024-25 season cartridge',
+      'cities:0': 'the 16,000-cities cartridge',
+    };
+    const cart = CART_NAMES[`${exp.ws}:${exp.idx}`];
+    if (workspace !== exp.ws) {
+      const wsName = exp.ws === 'football' ? '⚽ Football' : '🌍 Cities';
+      return `ℹ this fact lives in the ${wsName} workspace — switch in step 2, ` +
+        `mount ${cart}, ${suffix} (stored answer: ${exp.answer})`;
+    }
+    if (mounted === null) {
+      return `ℹ nothing is mounted, so the bare base is guessing — mount ` +
+        `${cart} in step 3 ${suffix} (stored answer: ${exp.answer})`;
+    }
+    return `ℹ this fact lives in ${cart} — mount it in step 3 ${suffix} ` +
+      `(stored answer: ${exp.answer})`;
+  }
+
   // Provenance verdict for the answer just generated: an exact membership
   // check against the cartridge's audited key store, cross-read with the
   // engram's injection-norm signal. The signal alone detects a silent
@@ -405,11 +438,18 @@
     const shard = workspace === 'football'
       ? (mounted === 0 ? 'shard_a' : 'shard_b') : 'shard_c';
     const inStore = storedKeys ? storedKeys[shard]?.has(key) : null;
+    const knownMiss = storedKeys?.[`${shard}_misses`]?.has(key) ?? false;
     const active = sig.max >= SIG_THRESH[workspace];
     const sigNote = ` — memory signal ${sig.max.toFixed(1)}`;
     if (inStore === null) {
       el.textContent = `memory signal ${sig.max.toFixed(1)}`;
       el.className = 'check sig';
+    } else if (knownMiss) {
+      el.textContent =
+        `⚠ known audit miss — this fact is stored but the audit flags it as ` +
+        `mis-recalled (one of ${storedKeys[`${shard}_misses`].size} of ` +
+        `${storedKeys[shard].size})${sigNote}`;
+      el.className = 'check warn';
     } else if (inStore) {
       el.textContent = `✓ stored fact — in this cartridge's audited store${sigNote}`;
       el.className = 'check ok';
@@ -474,9 +514,7 @@
       if (expected && $('prompt').value === prompt) {
         const el = $('answer-check');
         if (workspace !== expected.ws || mounted !== expected.idx) {
-          el.textContent =
-            `ℹ this sample's stored fact lives in a different cartridge — ` +
-            `mount it to compare (stored answer: ${expected.answer})`;
+          el.textContent = mountHint(expected, 'to recall this fact');
           el.className = 'check';
         } else {
           const hit = genSpan.textContent.trim().startsWith(expected.answer);
