@@ -194,6 +194,24 @@ export declare class Wllama {
      */
     setEngram(index: number | null): Promise<void>;
     /**
+     * Read the engram confidence signal: L2 norms of the mounted cartridge's
+     * injected residual, accumulated per token since the last reset.
+     *
+     * `trace` holds the most recent positions' per-order norms flattened with
+     * `traceStride` floats per position (one norm per n-gram order, then the
+     * full-residual norm). A stored key fires the high orders; a base-model
+     * guess leaves the memory silent.
+     */
+    getEngramSignal(opts?: {
+        reset?: boolean;
+    }): Promise<{
+        mean: number;
+        max: number;
+        count: number;
+        traceStride: number;
+        trace: number[];
+    }>;
+    /**
      * Get token ID associated to BOS (begin of sentence) token.
      *
      * NOTE: This can only being used after `loadModel` is called.

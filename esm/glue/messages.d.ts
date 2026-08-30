@@ -144,6 +144,19 @@ export interface GlueMsgEngramSetRes {
     success: boolean;
     message: string;
 }
+export interface GlueMsgEngramSignalReq {
+    _name: "engs_req";
+    reset: boolean;
+}
+export interface GlueMsgEngramSignalRes {
+    _name: "engs_res";
+    success: boolean;
+    sig_mean: number;
+    sig_max: number;
+    sig_count: number;
+    trace_stride: number;
+    trace: number[];
+}
 export interface GlueMsgTestBackendOpsReq {
     _name: "tbop_req";
     args: string[];
@@ -153,4 +166,4 @@ export interface GlueMsgTestBackendOpsRes {
     retcode: number;
     success: boolean;
 }
-export type GlueMsg = GlueMsgError | GlueMsgLoadReq | GlueMsgLoadRes | GlueMsgCompletionReq | GlueMsgCompletionRes | GlueMsgEmbeddingReq | GlueMsgEmbeddingRes | GlueMsgRerankReq | GlueMsgRerankRes | GlueMsgGetResultReq | GlueMsgGetResultRes | GlueMsgEngramSetReq | GlueMsgEngramSetRes | GlueMsgTestBackendOpsReq | GlueMsgTestBackendOpsRes;
+export type GlueMsg = GlueMsgError | GlueMsgLoadReq | GlueMsgLoadRes | GlueMsgCompletionReq | GlueMsgCompletionRes | GlueMsgEmbeddingReq | GlueMsgEmbeddingRes | GlueMsgRerankReq | GlueMsgRerankRes | GlueMsgGetResultReq | GlueMsgGetResultRes | GlueMsgEngramSetReq | GlueMsgEngramSetRes | GlueMsgEngramSignalReq | GlueMsgEngramSignalRes | GlueMsgTestBackendOpsReq | GlueMsgTestBackendOpsRes;

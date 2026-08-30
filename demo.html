@@ -73,6 +73,8 @@
     .check { font-size: 0.85rem; margin-top: 6px; }
     .check.ok { color: var(--accent); }
     .check.miss { color: var(--copper); }
+    .check.warn { color: var(--copper); }
+    .check .sig { color: var(--muted); font-size: 0.78rem; }
     .hidden { display: none; }
     .ws-note { color: var(--muted); font-size: 0.78rem; margin-top: 8px; }
   </style>
@@ -128,6 +130,7 @@
     <div><button id="btn-run">Complete</button></div>
     <div id="output"></div>
     <div id="answer-check" class="check"></div>
+    <div id="provenance" class="check"></div>
   </section>
 
   <p class="sub" style="margin-top:24px">
@@ -165,6 +168,10 @@
   let mounted = null;      // engram index in the current workspace, or null
   let facts = null;
   let expected = null;     // { answer, ws, idx }
+  let storedKeys = null;   // { shard_a: Set, shard_b: Set, shard_c: Set }
+  // memory-signal threshold separating "the cartridge fired" from ambient
+  // noise; per workspace because the football stack runs at a lower scale
+  const SIG_THRESH = { football: 4.0, cities: 8.0 };
 
   const mb = (n) => (n / 1048576).toFixed(1);
   function progressRow(label) {
@@ -324,6 +331,11 @@
       try {
         facts = await (await fetch(`${HF}/demo-facts.json`)).json();
       } catch { /* optional */ }
+      try {
+        const raw = await (await fetch(`${HF}/stored-keys.json?v=${ASSET_VERSION}`)).json();
+        storedKeys = Object.fromEntries(
+          Object.entries(raw).map(([k, v]) => [k, new Set(v)]));
+      } catch { /* provenance check unavailable */ }
       status('Fetching the base model (~1.2 GB, cached after the first visit)…');
       const model = await fetchBlob('qwen3-0.6b-base-f16.gguf', 'Base model · Qwen3-0.6B F16');
       blobs = { model, cartA, cartB, cartC, formatLora };
@@ -376,11 +388,50 @@
   $('btn-none-c').onclick = () => mount(null, '', 'btn-none-c', '');
   $('btn-c').onclick = () => mount(0, '16,000-cities cartridge', 'btn-none-c', 'btn-c');
 
+  // Provenance verdict for the answer just generated: an exact membership
+  // check against the cartridge's audited key store, cross-read with the
+  // engram's injection-norm signal. The signal alone detects a silent
+  // memory; the store check is what's authoritative — a query that shares
+  // suffix tokens with stored keys can make the memory fire and produce a
+  // plausible BLEND of neighbouring facts, which only the store check
+  // catches.
+  async function showProvenance(prompt) {
+    const el = $('provenance');
+    let sig = null;
+    try {
+      sig = await wllama.getEngramSignal({ reset: true });
+    } catch { return; /* runtime without the signal API */ }
+    const key = prompt.replace(/\|\s*$/, '').trim();
+    const shard = workspace === 'football'
+      ? (mounted === 0 ? 'shard_a' : 'shard_b') : 'shard_c';
+    const inStore = storedKeys ? storedKeys[shard]?.has(key) : null;
+    const active = sig.max >= SIG_THRESH[workspace];
+    const sigNote = ` — memory signal ${sig.max.toFixed(1)}`;
+    if (inStore === null) {
+      el.textContent = `memory signal ${sig.max.toFixed(1)}`;
+      el.className = 'check sig';
+    } else if (inStore) {
+      el.textContent = `✓ stored fact — in this cartridge's audited store${sigNote}`;
+      el.className = 'check ok';
+    } else if (!active) {
+      el.textContent =
+        `✗ not in this cartridge — the memory stayed silent${sigNote}. ` +
+        `This is a base-model guess, not a fact.`;
+      el.className = 'check miss';
+    } else {
+      el.textContent =
+        `⚠ not a stored fact — the memory fired on look-alike keys${sigNote}. ` +
+        `Plausible blend of neighbouring entries, not a stored value.`;
+      el.className = 'check warn';
+    }
+  }
+
   $('btn-run').onclick = async () => {
     const prompt = $('prompt').value;
     if (!prompt || !wllama) return;
     $('btn-run').disabled = true;
     $('answer-check').textContent = '';
+    $('provenance').textContent = '';
     const out = $('output');
     out.innerHTML = '';
     const promptSpan = document.createElement('span');
@@ -417,6 +468,8 @@
         el.textContent =
           'ℹ no cartridge mounted — this is the bare base guessing. Mount one in step 3.';
         el.className = 'check';
+      } else {
+        await showProvenance(prompt);
       }
       if (expected && $('prompt').value === prompt) {
         const el = $('answer-check');
