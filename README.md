@@ -8,6 +8,10 @@ fact memory for a frozen model, running entirely in the browser tab.
 - Base model and cartridges load at runtime from
   https://huggingface.co/lewisdog/engram-md-demo (streamed with per-file
   progress bars; browser-cached after first visit).
+- Workspaces: Football (base + format LoRA, season cartridges), Cities (bare
+  base, 16k-cities cartridge) and Chat (Qwen3-0.6B instruct base with all three
+  memories rebuilt against it; the model writes the memory's key, a plain
+  completion answers it exactly as audited, the model phrases the value).
 - `vercel.json` sets the COOP/COEP headers required for multithreaded wasm.
 - Local preview: `node serve.mjs` then http://127.0.0.1:8090
 - End-to-end test (from the wllama checkout, which has Playwright):

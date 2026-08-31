@@ -77,6 +77,21 @@
     .check .sig { color: var(--muted); font-size: 0.78rem; }
     .hidden { display: none; }
     .ws-note { color: var(--muted); font-size: 0.78rem; margin-top: 8px; }
+    #chat-log { display: grid; gap: 10px; margin-top: 8px; }
+    .msg { padding: 8px 12px; border-radius: 6px; font-size: 0.9rem; white-space: pre-wrap; }
+    .msg.user { background: var(--ground); border: 1px solid var(--rule); justify-self: end; max-width: 85%; }
+    .msg.assistant { border: 1px solid var(--rule); max-width: 92%; }
+    .lookup { font-size: 0.8rem; color: var(--muted); border-left: 2px solid var(--rule);
+              padding: 4px 10px; margin: 4px 0 8px; }
+    .lookup .key { color: var(--ink); }
+    .lookup .value { color: var(--accent); }
+    .lookup .prov { display: block; margin-top: 3px; }
+    .lookup .prov.ok { color: var(--accent); }
+    .lookup .prov.miss, .lookup .prov.warn { color: var(--copper); }
+    .chat-row { display: flex; gap: 8px; margin-top: 10px; }
+    .chat-row input { flex: 1; background: var(--ground); color: var(--ink);
+      border: 1px solid var(--rule); border-radius: 5px; font: inherit; font-size: 0.9rem; padding: 8px; }
+    .chat-row button { margin: 0; }
   </style>
 </head>
 <body>
@@ -88,7 +103,8 @@
   Premier League result of a season (2025-26 and 2024-25, both after the base model's training
   cutoff, stacked on a LoRA <em>behaviour</em> cartridge that teaches answer format); one holds
   the population of the world's 16,000 largest cities. Ask, swap, unmount — the knowledge is
-  provably gone.</p>
+  provably gone. The <strong>Chat</strong> workspace puts an instruct model in front of the same
+  memories: ask in plain language, watch it write the memory's key, and unmount to make it forget.</p>
 
   <section>
     <h2>1 · Load</h2>
@@ -103,10 +119,13 @@
     <h2>2 · Workspace</h2>
     <button id="ws-football" class="active">⚽ Football (base + format LoRA)</button>
     <button id="ws-cities">🌍 Cities (bare base)</button>
+    <button id="ws-chat">💬 Chat (instruct base)</button>
     <p class="ws-note">A fact cartridge is built against the exact stack it runs on:
     the season cartridges target the base merged with the format LoRA; the cities
-    cartridge targets the bare base. Switching workspaces reloads the model from
-    memory (~10 s) with the right stack.</p>
+    cartridge targets the bare base; the chat workspace uses an instruct base
+    (Qwen3-0.6B chat, an extra ~1.5 GB fetched on first use) with all three memories
+    rebuilt against it. Switching workspaces reloads the model from memory (~10 s)
+    with the right stack.</p>
   </section>
 
   <section id="sec-mount" class="hidden">
@@ -120,7 +139,26 @@
       <button id="btn-none-c" class="active">No cartridge</button>
       <button id="btn-c">16,000 cities</button>
     </span>
+    <span id="mount-chat" class="hidden">
+      <button id="btn-none-chat" class="active">No memory</button>
+      <button id="btn-chat-a">2025-26 season</button>
+      <button id="btn-chat-b">2024-25 season</button>
+      <button id="btn-chat-c">16,000 cities</button>
+    </span>
     <div id="mount-info">Nothing mounted — the base model knows none of the facts.</div>
+  </section>
+
+  <section id="sec-chat" class="hidden">
+    <h2>4 · Chat</h2>
+    <p class="ws-note">Ask in plain language. The model decides what to look up and writes the
+    memory's exact key; the mounted cartridge answers it; the model turns the value into a
+    sentence. Unmount the memory and it forgets — and says so.</p>
+    <div id="chat-log"></div>
+    <div class="samples" id="chat-samples"></div>
+    <div class="chat-row">
+      <input id="chat-input" type="text" placeholder="what is the population of Nairobi?">
+      <button id="btn-send">Send</button>
+    </div>
   </section>
 
   <section id="sec-query" class="hidden">
@@ -169,6 +207,7 @@
   let facts = null;
   let expected = null;     // { answer, ws, idx }
   let storedKeys = null;   // { shard_a: Set, shard_b: Set, shard_c: Set }
+  let chatHistory = [];    // prior {role, content} prose turns for the chat tab
   // memory-signal threshold separating "the cartridge fired" from ambient
   // noise; per workspace because the football stack runs at a lower scale
   // (cities recalibrated for the 4-order cartridge: stored ≥13, blends ≥15,
@@ -275,13 +314,59 @@
     }
   }
 
+  const WS_BTNS = ['ws-football', 'ws-cities', 'ws-chat', 'btn-run', 'btn-send'];
+  async function ensureBaseBlobs() {
+    if (blobs.model) return;
+    $('progress').classList.remove('hidden');
+    $('progress').innerHTML = '';
+    status('Fetching the base stack (from the browser cache after the first visit)…');
+    const [cartA, cartB, cartC, formatLora] = await Promise.all([
+      fetchBlob('cartridge-premier-league-2526.gguf', 'Cartridge A · Premier League 2025-26'),
+      fetchBlob('cartridge-premier-league-2425.gguf', 'Cartridge B · Premier League 2024-25'),
+      fetchBlob('cartridge-cities-16k.gguf', 'Cartridge C · 16,000 cities'),
+      fetchBlob('format-lora-2324.gguf', 'Format LoRA (behaviour cartridge)'),
+    ]);
+    const model = await fetchBlob('qwen3-0.6b-base-f16.gguf', 'Base model · Qwen3-0.6B F16');
+    Object.assign(blobs, { model, cartA, cartB, cartC, formatLora });
+    $('progress').classList.add('hidden');
+  }
+  // keep only one stack's blobs in memory: ~3 GB of live Blobs across both
+  // stacks made fetches fail in the browser; the other stack comes back
+  // from the Cache Storage layer in a second when needed
+  function releaseBlobs(keys) {
+    for (const k of keys) blobs[k] = null;
+  }
+
+  async function ensureChatBlobs() {
+    if (blobs.chatModel) return;
+    $('progress').classList.remove('hidden');
+    $('progress').innerHTML = '';
+    status('Fetching the chat stack: instruct base (~1.5 GB) + its three cartridges…');
+    const [chatA, chatB, chatC] = await Promise.all([
+      fetchBlob('cartridge-chat-premier-league-2526.gguf', 'Chat cartridge · Premier League 2025-26'),
+      fetchBlob('cartridge-chat-premier-league-2425.gguf', 'Chat cartridge · Premier League 2024-25'),
+      fetchBlob('cartridge-chat-cities-16k.gguf', 'Chat cartridge · 16,000 cities'),
+    ]);
+    const chatModel = await fetchBlob('qwen3-0.6b-chat-f16.gguf', 'Instruct base · Qwen3-0.6B F16');
+    Object.assign(blobs, { chatModel, chatA, chatB, chatC });
+    $('progress').classList.add('hidden');
+  }
+
   async function loadWorkspace(ws) {
     status(ws === 'football'
       ? 'Loading the football stack (base + format LoRA)…'
-      : 'Loading the bare base for cities…');
-    for (const id of ['ws-football', 'ws-cities', 'btn-run']) $(id).disabled = true;
+      : ws === 'cities' ? 'Loading the bare base for cities…'
+      : 'Loading the chat stack (instruct base)…');
+    for (const id of WS_BTNS) $(id).disabled = true;
     try {
       if (wllama) { await wllama.exit(); wllama = null; }
+      if (ws === 'chat') {
+        releaseBlobs(['model', 'cartA', 'cartB', 'cartC', 'formatLora']);
+        await ensureChatBlobs();
+      } else {
+        releaseBlobs(['chatModel', 'chatA', 'chatB', 'chatC']);
+        await ensureBaseBlobs();
+      }
       wllama = new Wllama({ default: './esm/wasm/wllama.wasm' });
       wllama.setCompat({
         wasm: new URL('./compat/wasm/wllama.wasm', location.href).href,
@@ -293,36 +378,46 @@
           engrams: [{ blob: blobs.cartA }, { blob: blobs.cartB }],
           lora_adapters: [{ blob: blobs.formatLora }],
         });
-      } else {
+      } else if (ws === 'cities') {
         await wllama.loadModel([blobs.model], {
           n_ctx: 512,
           engrams: [{ blob: blobs.cartC }],
         });
+      } else {
+        await wllama.loadModel([blobs.chatModel], {
+          n_ctx: 1024,
+          engrams: [{ blob: blobs.chatA }, { blob: blobs.chatB }, { blob: blobs.chatC }],
+        });
       }
       workspace = ws;
       mounted = null;
-      $('ws-football').classList.toggle('active', ws === 'football');
-      $('ws-cities').classList.toggle('active', ws === 'cities');
-      $('mount-football').classList.toggle('hidden', ws !== 'football');
-      $('mount-cities').classList.toggle('hidden', ws !== 'cities');
-      for (const id of ['btn-none', 'btn-a', 'btn-b', 'btn-none-c', 'btn-c']) {
-        $(id).classList.remove('active');
+      for (const w of ['football', 'cities', 'chat']) {
+        $(`ws-${w}`).classList.toggle('active', ws === w);
+        $(`mount-${w}`).classList.toggle('hidden', ws !== w);
       }
-      $(ws === 'football' ? 'btn-none' : 'btn-none-c').classList.add('active');
-      $('mount-info').textContent =
-        'Nothing mounted — the base model knows none of the facts.';
+      $('sec-chat').classList.toggle('hidden', ws !== 'chat');
+      $('sec-query').classList.toggle('hidden', ws === 'chat');
+      for (const id of MOUNT_BTNS) $(id).classList.remove('active');
+      $({ football: 'btn-none', cities: 'btn-none-c', chat: 'btn-none-chat' }[ws]).classList.add('active');
+      $('mount-info').textContent = ws === 'chat'
+        ? 'No memory mounted — the model answers from its own knowledge, and says so.'
+        : 'Nothing mounted — the base model knows none of the facts.';
       $('prompt').value = '';
       $('output').innerHTML = '';
       $('answer-check').textContent = '';
+      $('chat-log').innerHTML = '';
+      chatHistory = [];
       renderSamples();
+      renderChatSamples();
       status(ws === 'football'
         ? 'Football workspace ready: two season cartridges staged, none mounted.'
-        : 'Cities workspace ready: the 16k-cities cartridge staged, not mounted.');
+        : ws === 'cities' ? 'Cities workspace ready: the 16k-cities cartridge staged, not mounted.'
+        : 'Chat workspace ready: three memories staged, none mounted — mount one in step 3.');
     } catch (err) {
       console.error(err);
       status('Error: ' + err.message);
     }
-    for (const id of ['ws-football', 'ws-cities', 'btn-run']) $(id).disabled = false;
+    for (const id of WS_BTNS) $(id).disabled = false;
   }
 
   $('btn-load-assets').onclick = async () => {
@@ -364,35 +459,41 @@
 
   $('ws-football').onclick = () => workspace !== 'football' && loadWorkspace('football');
   $('ws-cities').onclick = () => workspace !== 'cities' && loadWorkspace('cities');
+  $('ws-chat').onclick = () => workspace !== 'chat' && loadWorkspace('chat');
 
-  const MOUNT_BTNS = ['btn-none', 'btn-a', 'btn-b', 'btn-none-c', 'btn-c'];
+  const MOUNT_BTNS = ['btn-none', 'btn-a', 'btn-b', 'btn-none-c', 'btn-c',
+                      'btn-none-chat', 'btn-chat-a', 'btn-chat-b', 'btn-chat-c'];
   async function mount(index, label, noneBtn, activeBtn) {
     $('mount-info').textContent = 'mounting…';
-    for (const id of [...MOUNT_BTNS, 'btn-run']) $(id).disabled = true;
+    for (const id of [...MOUNT_BTNS, 'btn-run', 'btn-send']) $(id).disabled = true;
     const t0 = performance.now();
     try {
       await wllama.setEngram(index);
     } catch (err) {
       console.error(err);
       $('mount-info').textContent = 'Error: ' + (err.message || err);
-      for (const id of [...MOUNT_BTNS, 'btn-run']) $(id).disabled = false;
+      for (const id of [...MOUNT_BTNS, 'btn-run', 'btn-send']) $(id).disabled = false;
       return;
     }
-    for (const id of [...MOUNT_BTNS, 'btn-run']) $(id).disabled = false;
+    for (const id of [...MOUNT_BTNS, 'btn-run', 'btn-send']) $(id).disabled = false;
     const ms = (performance.now() - t0).toFixed(1);
     mounted = index;
-    for (const id of ['btn-none', 'btn-a', 'btn-b', 'btn-none-c', 'btn-c']) {
-      $(id).classList.remove('active');
-    }
+    for (const id of MOUNT_BTNS) $(id).classList.remove('active');
     if (index === null) {
       $(noneBtn).classList.add('active');
-      $('mount-info').textContent =
-        `Unmounted in ${ms} ms — the facts are provably gone; the base model is byte-identical.`;
+      $('mount-info').textContent = workspace === 'chat'
+        ? `Unmounted in ${ms} ms — the model has forgotten; it will say so.`
+        : `Unmounted in ${ms} ms — the facts are provably gone; the base model is byte-identical.`;
     } else {
       $(activeBtn).classList.add('active');
       $('mount-info').textContent = `${label} mounted in ${ms} ms.`;
     }
+    if (workspace === 'chat') renderChatSamples();
   }
+  $('btn-none-chat').onclick = () => mount(null, '', 'btn-none-chat', '');
+  $('btn-chat-a').onclick = () => mount(0, '2025-26 season memory', 'btn-none-chat', 'btn-chat-a');
+  $('btn-chat-b').onclick = () => mount(1, '2024-25 season memory', 'btn-none-chat', 'btn-chat-b');
+  $('btn-chat-c').onclick = () => mount(2, '16,000-cities memory', 'btn-none-chat', 'btn-chat-c');
   $('btn-none').onclick = () => mount(null, '', 'btn-none', '');
   $('btn-a').onclick = () => mount(0, '2025-26 season cartridge', 'btn-none', 'btn-a');
   $('btn-b').onclick = () => mount(1, '2024-25 season cartridge', 'btn-none', 'btn-b');
@@ -428,43 +529,322 @@
   // suffix tokens with stored keys can make the memory fire and produce a
   // plausible BLEND of neighbouring facts, which only the store check
   // catches.
-  async function showProvenance(prompt) {
-    const el = $('provenance');
+  // which audited key store the currently mounted memory corresponds to
+  function currentShard() {
+    if (workspace === 'football') return mounted === 0 ? 'shard_a' : 'shard_b';
+    if (workspace === 'cities') return 'shard_c';
+    return ['shard_a', 'shard_b', 'shard_c'][mounted] ?? 'shard_c';
+  }
+  function currentSigThresh() {
+    // instruct-stack cartridges fire lower: stored football ≈6.4, unknown ≈2.2
+    if (workspace === 'chat') return mounted === 2 ? 12.0 : 4.0;
+    return SIG_THRESH[workspace];
+  }
+  // verdict on the answer just generated for `prompt` (a canonical key line)
+  async function computeProvenance(prompt) {
     let sig = null;
     try {
       sig = await wllama.getEngramSignal({ reset: true });
-    } catch { return; /* runtime without the signal API */ }
+    } catch { return null; /* runtime without the signal API */ }
     const key = prompt.replace(/\|\s*$/, '').trim();
-    const shard = workspace === 'football'
-      ? (mounted === 0 ? 'shard_a' : 'shard_b') : 'shard_c';
+    const shard = currentShard();
+    const missKey = workspace === 'chat' ? `${shard}_chat_misses` : `${shard}_misses`;
     const inStore = storedKeys ? storedKeys[shard]?.has(key) : null;
-    const knownMiss = storedKeys?.[`${shard}_misses`]?.has(key) ?? false;
-    const active = sig.max >= SIG_THRESH[workspace];
+    const knownMiss = storedKeys?.[missKey]?.has(key) ?? false;
+    const active = sig.max >= currentSigThresh();
     const sigNote = ` — memory signal ${sig.max.toFixed(1)}`;
-    if (inStore === null) {
-      el.textContent = `memory signal ${sig.max.toFixed(1)}`;
-      el.className = 'check sig';
-    } else if (knownMiss) {
-      el.textContent =
-        `⚠ known audit miss — this fact is stored but the audit flags it as ` +
-        `mis-recalled (one of ${storedKeys[`${shard}_misses`].size} of ` +
-        `${storedKeys[shard].size})${sigNote}`;
-      el.className = 'check warn';
-    } else if (inStore) {
-      el.textContent = `✓ stored fact — in this cartridge's audited store${sigNote}`;
-      el.className = 'check ok';
-    } else if (!active) {
-      el.textContent =
-        `✗ not in this cartridge — the memory stayed silent${sigNote}. ` +
-        `This is a base-model guess, not a fact.`;
-      el.className = 'check miss';
+    if (inStore === null) return { cls: 'sig', ok: false, text: `memory signal ${sig.max.toFixed(1)}` };
+    if (knownMiss) return { cls: 'warn', ok: false, text:
+      `⚠ known audit miss — this fact is stored but the audit flags it as ` +
+      `mis-recalled (one of ${storedKeys[missKey].size} of ${storedKeys[shard].size})${sigNote}` };
+    if (inStore) return { cls: 'ok', ok: true, text:
+      `✓ stored fact — in this cartridge's audited store${sigNote}` };
+    if (!active) return { cls: 'miss', ok: false, text:
+      `✗ not in this cartridge — the memory stayed silent${sigNote}. ` +
+      `This is a base-model guess, not a fact.` };
+    return { cls: 'warn', ok: false, text:
+      `⚠ not a stored fact — the memory fired on look-alike keys${sigNote}. ` +
+      `Plausible blend of neighbouring entries, not a stored value.` };
+  }
+  async function showProvenance(prompt) {
+    const v = await computeProvenance(prompt);
+    if (!v) return;
+    const el = $('provenance');
+    el.textContent = v.text;
+    el.className = 'check ' + v.cls;
+  }
+
+  // ---------------------------------------------------------------- chat
+  // The model decides WHAT to look up and writes the memory's exact key; the
+  // mounted cartridge answers it (a plain completion, identical to the
+  // audited path); the model turns the value into a sentence. Three passes,
+  // one model, one forward stack.
+  const COUNTRY_CODES = {
+    UK: 'GB', 'UNITED KINGDOM': 'GB', ENGLAND: 'GB', SCOTLAND: 'GB', WALES: 'GB', BRITAIN: 'GB',
+    USA: 'US', 'UNITED STATES': 'US', AMERICA: 'US', UAE: 'AE', 'UNITED ARAB EMIRATES': 'AE',
+    KENYA: 'KE', JAPAN: 'JP', CHINA: 'CN', FRANCE: 'FR', SPAIN: 'ES', GERMANY: 'DE', ITALY: 'IT',
+    INDIA: 'IN', BRAZIL: 'BR', RUSSIA: 'RU', AUSTRALIA: 'AU', CANADA: 'CA', MEXICO: 'MX',
+    NIGERIA: 'NG', EGYPT: 'EG', TURKEY: 'TR', IRAN: 'IR', PAKISTAN: 'PK', BANGLADESH: 'BD',
+    INDONESIA: 'ID', PHILIPPINES: 'PH', VIETNAM: 'VN', THAILAND: 'TH', 'SOUTH KOREA': 'KR',
+    KOREA: 'KR', ARGENTINA: 'AR', COLOMBIA: 'CO', PERU: 'PE', CHILE: 'CL', 'SOUTH AFRICA': 'ZA',
+    ETHIOPIA: 'ET', TANZANIA: 'TZ', GHANA: 'GH', MOROCCO: 'MA', ALGERIA: 'DZ',
+    'SAUDI ARABIA': 'SA', IRAQ: 'IQ', POLAND: 'PL', NETHERLANDS: 'NL', HOLLAND: 'NL',
+    BELGIUM: 'BE', PORTUGAL: 'PT', GREECE: 'GR', SWEDEN: 'SE', NORWAY: 'NO', DENMARK: 'DK',
+    FINLAND: 'FI', IRELAND: 'IE', AUSTRIA: 'AT', SWITZERLAND: 'CH', 'CZECH REPUBLIC': 'CZ',
+    CZECHIA: 'CZ', HUNGARY: 'HU', ROMANIA: 'RO', UKRAINE: 'UA', ISRAEL: 'IL',
+    'NEW ZEALAND': 'NZ', SINGAPORE: 'SG', MALAYSIA: 'MY', TAIWAN: 'TW', 'HONG KONG': 'HK',
+    UGANDA: 'UG', SUDAN: 'SD', ZIMBABWE: 'ZW', ZAMBIA: 'ZM', SENEGAL: 'SN', CUBA: 'CU',
+    VENEZUELA: 'VE', ECUADOR: 'EC', BOLIVIA: 'BO', NEPAL: 'NP', 'SRI LANKA': 'LK', MYANMAR: 'MM',
+  };
+  const TEAM_ALIASES = {
+    'manchester united': 'Man United', 'man utd': 'Man United', 'manchester city': 'Man City',
+    'nottingham forest': "Nott'm Forest", 'forest': "Nott'm Forest",
+    'tottenham hotspur': 'Tottenham', 'spurs': 'Tottenham', 'wolverhampton wanderers': 'Wolves',
+    'wolverhampton': 'Wolves', 'newcastle united': 'Newcastle', 'west ham united': 'West Ham',
+    'brighton & hove albion': 'Brighton', 'brighton and hove albion': 'Brighton',
+    'leeds united': 'Leeds', 'leicester city': 'Leicester', 'ipswich town': 'Ipswich',
+    'afc bournemouth': 'Bournemouth', 'luton town': 'Luton', 'sheffield utd': 'Sheffield United',
+  };
+  const norm = (t) => t.toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+  function shardTeams(shard) {
+    const teams = new Set();
+    for (const k of storedKeys?.[shard] ?? []) {
+      const m = k.match(/^(.*?) v (.*?) \| result$/);
+      if (m) { teams.add(m[1]); teams.add(m[2]); }
+    }
+    return [...teams].sort();
+  }
+  // teams mentioned in free text, in order of appearance (aliases included)
+  function teamsInText(text, shard) {
+    const n = ' ' + norm(text) + ' ';
+    const found = [];
+    const consider = (needle, team) => {
+      const i = n.indexOf(' ' + needle + ' ');
+      if (i >= 0 && !found.some((f) => f.team === team)) found.push({ i, team });
+    };
+    for (const t of shardTeams(shard)) consider(norm(t), t);
+    for (const [alias, team] of Object.entries(TEAM_ALIASES)) consider(alias, team);
+    // plain city words for the common one-word teams
+    for (const [w, team] of Object.entries({ newcastle: 'Newcastle', tottenham: 'Tottenham',
+      wolves: 'Wolves', brighton: 'Brighton', leeds: 'Leeds', leicester: 'Leicester',
+      ipswich: 'Ipswich', bournemouth: 'Bournemouth', forest: "Nott'm Forest" })) consider(w, team);
+    return found.sort((a, b) => a.i - b.i).map((f) => f.team)
+      .filter((t) => shardTeams(shard).includes(t)).slice(0, 2);
+  }
+  function canonTeam(name, shard) {
+    const teams = shardTeams(shard);
+    const n = norm(name);
+    if (TEAM_ALIASES[n]) return TEAM_ALIASES[n];
+    for (const t of teams) if (norm(t) === n) return t;
+    for (const t of teams) if (n.includes(norm(t)) || norm(t).includes(n)) return t;
+    return name.trim();
+  }
+  // turn the model's "<city>, <country>" into the memory's "<city>, <CC>"
+  function canonCity(text) {
+    const m = text.trim().match(/^(.+?),\s*([A-Za-z .]+)$/);
+    let city = (m ? m[1] : text).trim();
+    let cc = m ? m[2].trim().toUpperCase() : '';
+    cc = COUNTRY_CODES[cc] ?? cc;
+    const keys = storedKeys?.shard_c;
+    if (keys) {
+      if (cc.length === 2 && keys.has(`${city}, ${cc} | population`)) return `${city}, ${cc}`;
+      // find the city by name; prefer the model's country if several match
+      const hits = [];
+      for (const k of keys) {
+        const km = k.match(/^(.*), ([A-Z]{2}) \| population$/);
+        if (km && norm(km[1]) === norm(city)) hits.push(km);
+      }
+      if (hits.length) {
+        const pick = hits.find((h) => h[2] === cc) ?? hits[0];
+        return `${pick[1]}, ${pick[2]}`;
+      }
+    }
+    return cc.length === 2 ? `${city}, ${cc}` : city;
+  }
+
+  function chatSystemPrompt() {
+    const base = 'You are a concise assistant. Answer in one or two sentences.';
+    if (mounted === null) {
+      return base + ' You have no fact memory mounted right now: answer from your own ' +
+        'general knowledge and, for any specific figure or result, say plainly that it is ' +
+        'from memory-less knowledge and may be wrong.';
+    }
+    if (mounted === 2) {
+      return base + `\nYou have a plug-in fact memory holding the populations of the world's 16,000 largest cities.
+To answer a question about a city's population, FIRST write a lookup line in exactly this form, on its own line, and stop:
+<City name>, <two-letter ISO country code> | population |
+Examples of lookup lines: "Paris, FR | population |", "Nairobi, KE | population |", "Manchester, GB | population |".
+Use the ISO code (GB for the UK, US for the USA, KE for Kenya). Never write a number yourself — the memory supplies it after the lookup line. If the question is not about a city's population, answer normally without a lookup line.`;
+    }
+    const shard = mounted === 0 ? 'shard_a' : 'shard_b';
+    const season = mounted === 0 ? '2025-26' : '2024-25';
+    return base + `\nYou have a plug-in fact memory holding every result of the ${season} Premier League season.
+To answer a question about a match, FIRST write a lookup line in exactly this form, on its own line, and stop:
+<Home team> v <Away team> | result |
+Use these exact team names: ${shardTeams(shard).join(', ')}.
+The home team comes first. Never write a score yourself — the memory supplies it after the lookup line. If the question is not about a match result, answer normally without a lookup line.`;
+  }
+
+  function addMsg(role, text) {
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+    div.textContent = text;
+    $('chat-log').appendChild(div);
+    div.scrollIntoView({ block: 'end' });
+    return div;
+  }
+
+  async function chatStream(messages, opts, onText) {
+    await wllama.createChatCompletion({
+      messages,
+      temperature: 0,
+      stream: true,
+      chat_template_kwargs: { enable_thinking: false },
+      ...opts,
+      onData: (chunk) => {
+        const piece = chunk.choices?.[0]?.delta?.content ?? chunk.choices?.[0]?.text ?? '';
+        if (piece) onText(piece);
+      },
+    });
+  }
+
+  async function runChatTurn(question) {
+    addMsg('user', question);
+    const bubble = addMsg('assistant', '');
+    const card = document.createElement('div');
+    card.className = 'lookup hidden';
+    const prose = document.createElement('span');
+    bubble.append(card, prose);
+    const system = { role: 'system', content: chatSystemPrompt() };
+    // each question stands alone: with a 0.6B model, prior answers in the
+    // context steered it into echoing them instead of answering
+    const msgs = [system, { role: 'user', content: question }];
+    let answer = '';
+    const write = (t) => { answer += t; prose.textContent = answer.trim(); };
+
+    if (mounted === null) {
+      await chatStream(msgs, { max_tokens: 120 }, write);
+      card.classList.remove('hidden');
+      card.innerHTML = '<span class="prov miss">✗ no memory mounted — this is the model\'s own knowledge, unverified</span>';
     } else {
-      el.textContent =
-        `⚠ not a stored fact — the memory fired on look-alike keys${sigNote}. ` +
-        `Plausible blend of neighbouring entries, not a stored value.`;
-      el.className = 'check warn';
+      const attr = mounted === 2 ? 'population' : 'result';
+      // pass 1: the model writes the key and stops at the attribute
+      let pre = '';
+      await chatStream(msgs, { max_tokens: 80, stop: [` | ${attr} |`, `| ${attr} |`] },
+        (t) => { pre += t; prose.textContent = pre.trim(); });
+      const lastLine = pre.trim().split('\n').filter((l) => l.trim()).pop() ?? '';
+      // the question itself is the most reliable source of the entities
+      const questionTeams = mounted === 2 ? [] : teamsInText(question, currentShard());
+      const looksLikeKey = mounted === 2
+        ? /^[^|.]{2,60},\s*[A-Za-z .]{2,30}$/.test(lastLine.trim())
+        : /^[^|.]{2,40} v [^|.]{2,40}$/.test(lastLine.trim()) || questionTeams.length === 2;
+      if (!looksLikeKey) {
+        // no lookup: the model answered directly
+        prose.textContent = pre.trim();
+        card.classList.remove('hidden');
+        card.innerHTML = '<span class="prov">ℹ no lookup — the model answered from its own knowledge</span>';
+        answer = pre;
+      } else {
+        // pass 2: canonicalise and ask the memory exactly as audited. A
+        // football question that does not name the venue is answered for
+        // BOTH legs (home and away fixtures are different stored facts).
+        const keys = [];
+        if (mounted === 2) {
+          keys.push(`${canonCity(lastLine)} | ${attr} |`);
+        } else {
+          const shard = currentShard();
+          let home, away;
+          if (questionTeams.length === 2) {
+            [home, away] = questionTeams;           // first-named = home
+          } else {
+            const m = lastLine.trim().match(/^(.+?) v (.+)$/);
+            home = canonTeam(m[1], shard); away = canonTeam(m[2], shard);
+          }
+          keys.push(`${home} v ${away} | ${attr} |`);
+          const venueStated = /\b(at home|away|host|hosted|visit|visited|at [A-Z])/i.test(question);
+          const reverse = `${away} v ${home} | ${attr} |`;
+          if (!venueStated && storedKeys?.[shard]?.has(reverse.replace(/\s*\|\s*$/, '').trim())) {
+            keys.push(reverse);
+          }
+        }
+        prose.textContent = '';
+        card.classList.remove('hidden');
+        card.innerHTML = '';
+        const results = [];
+        for (const canonical of keys) {
+          const row = document.createElement('div');
+          row.innerHTML = `<span class="key">${canonical}</span> <span class="value">…</span>`;
+          card.appendChild(row);
+          let value = '';
+          await wllama.createCompletion({
+            prompt: canonical, max_tokens: 12, temperature: 0, stop: ['\n'], stream: true,
+            onData: (c) => { value += c.choices[0].text; },
+          });
+          if (attr === 'result') { const i = value.indexOf(')'); if (i >= 0) value = value.slice(0, i + 1); }
+          else { const m = value.match(/\s*\d+/); if (m) value = m[0]; }
+          value = value.trim();
+          const verdict = await computeProvenance(canonical);
+          row.innerHTML = `<span class="key">${canonical}</span> <span class="value">${value}</span>` +
+            (verdict ? `<span class="prov ${verdict.cls}">${verdict.text}</span>` : '');
+          results.push({ canonical, value, ok: !!(verdict && verdict.ok) });
+        }
+        // pass 3: the model phrases the memory's answer(s)
+        const verified = results.filter((r) => r.ok);
+        const note = verified.length
+          ? `Memory results (verified stored facts): ` +
+            verified.map((r) => `"${r.canonical}" → ${r.value}`).join('; ') +
+            `. Answer my question in one or two sentences using exactly these values` +
+            (verified.length > 1 ? ` — mention both fixtures (the first-named team in each key is the home side)` : '') +
+            `; do not invent any other figures.`
+          : `The memory has no verified entry for ${results.map((r) => `"${r.canonical}"`).join(' or ')} (it returned ${results.map((r) => `"${r.value}"`).join(', ')}, unverified). Answer my question from your own knowledge in one sentence and say clearly that the memory could not confirm it.`;
+        const msgs2 = [...msgs, { role: 'assistant', content: results.map((r) => `${r.canonical} ${r.value}`).join('\n') },
+                       { role: 'user', content: note }];
+        answer = '';
+        await chatStream(msgs2, { max_tokens: 120 }, write);
+      }
+    }
+    chatHistory.push({ role: 'user', content: question }, { role: 'assistant', content: answer.trim() });
+    bubble.scrollIntoView({ block: 'end' });
+  }
+  function storedKeysHasCity(text) {
+    const n = norm(text.split(',')[0]);
+    for (const k of storedKeys?.shard_c ?? []) if (norm(k.split(',')[0]) === n) return true;
+    return false;
+  }
+
+  const CHAT_SAMPLES = {
+    none: ['what is the population of Nairobi?', 'who won Newcastle v Liverpool?'],
+    0: ['who won Newcastle against Liverpool?', 'what was the score in Arsenal v Tottenham?', 'tell me a joke'],
+    1: ['how did Arsenal do at home to Tottenham?', 'what was Leicester v Tottenham?'],
+    2: ['what is the population of Nairobi?', 'how many people live in manchester in england',
+        'population of Nanjing', 'tell me a joke'],
+  };
+  function renderChatSamples() {
+    const box = $('chat-samples');
+    box.innerHTML = '';
+    for (const q of CHAT_SAMPLES[mounted === null ? 'none' : mounted] ?? []) {
+      const b = document.createElement('button');
+      b.textContent = q;
+      b.onclick = () => { $('chat-input').value = q; $('btn-send').click(); };
+      box.appendChild(b);
     }
   }
+  async function sendChat() {
+    const q = $('chat-input').value.trim();
+    if (!q || !wllama || workspace !== 'chat') return;
+    $('chat-input').value = '';
+    for (const id of [...MOUNT_BTNS, 'btn-send', 'ws-football', 'ws-cities', 'ws-chat']) $(id).disabled = true;
+    try {
+      await runChatTurn(q);
+    } catch (err) {
+      console.error(err);
+      addMsg('assistant', '<error: ' + (err.message || err) + '>');
+    }
+    for (const id of [...MOUNT_BTNS, 'btn-send', 'ws-football', 'ws-cities', 'ws-chat']) $(id).disabled = false;
+  }
+  $('btn-send').onclick = sendChat;
+  $('chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
 
   $('btn-run').onclick = async () => {
     const prompt = $('prompt').value;
