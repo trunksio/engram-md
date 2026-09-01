@@ -596,15 +596,28 @@
     UGANDA: 'UG', SUDAN: 'SD', ZIMBABWE: 'ZW', ZAMBIA: 'ZM', SENEGAL: 'SN', CUBA: 'CU',
     VENEZUELA: 'VE', ECUADOR: 'EC', BOLIVIA: 'BO', NEPAL: 'NP', 'SRI LANKA': 'LK', MYANMAR: 'MM',
   };
+  // the memory stores football-data.co.uk short names; this table translates
+  // the common ways people write a club into that exact form. The recall is
+  // exact — this translate step is the only fuzzy part, so keep it generous.
   const TEAM_ALIASES = {
-    'manchester united': 'Man United', 'man utd': 'Man United', 'manchester city': 'Man City',
-    'nottingham forest': "Nott'm Forest", 'forest': "Nott'm Forest",
-    'tottenham hotspur': 'Tottenham', 'spurs': 'Tottenham', 'wolverhampton wanderers': 'Wolves',
-    'wolverhampton': 'Wolves', 'newcastle united': 'Newcastle', 'west ham united': 'West Ham',
-    'brighton & hove albion': 'Brighton', 'brighton and hove albion': 'Brighton',
-    'leeds united': 'Leeds', 'leicester city': 'Leicester', 'ipswich town': 'Ipswich',
-    'afc bournemouth': 'Bournemouth', 'luton town': 'Luton', 'sheffield utd': 'Sheffield United',
+    'manchester united': 'Man United', 'man utd': 'Man United', 'man united': 'Man United',
+    'man u': 'Man United', 'mufc': 'Man United', 'the red devils': 'Man United',
+    'manchester city': 'Man City', 'man city': 'Man City', 'mcfc': 'Man City', 'the citizens': 'Man City',
+    'nottingham forest': "Nott'm Forest", "nott'm forest": "Nott'm Forest", 'notts forest': "Nott'm Forest",
+    'forest': "Nott'm Forest", 'nffc': "Nott'm Forest",
+    'tottenham hotspur': 'Tottenham', 'tottenham': 'Tottenham', 'spurs': 'Tottenham', 'thfc': 'Tottenham',
+    'wolverhampton wanderers': 'Wolves', 'wolverhampton': 'Wolves', 'wolves': 'Wolves',
+    'newcastle united': 'Newcastle', 'newcastle': 'Newcastle', 'the magpies': 'Newcastle', 'toon': 'Newcastle',
+    'west ham united': 'West Ham', 'west ham': 'West Ham', 'the hammers': 'West Ham',
+    'brighton & hove albion': 'Brighton', 'brighton and hove albion': 'Brighton', 'brighton': 'Brighton',
+    'leeds united': 'Leeds', 'leeds': 'Leeds', 'leicester city': 'Leicester', 'leicester': 'Leicester',
+    'ipswich town': 'Ipswich', 'ipswich': 'Ipswich', 'afc bournemouth': 'Bournemouth', 'bournemouth': 'Bournemouth',
+    'luton town': 'Luton', 'luton': 'Luton', 'sheffield united': 'Sheffield United', 'sheffield utd': 'Sheffield United',
+    'the gunners': 'Arsenal', 'gunners': 'Arsenal', 'the blues': 'Chelsea', 'the reds': 'Liverpool',
+    'the toffees': 'Everton', 'villa': 'Aston Villa', 'palace': 'Crystal Palace',
   };
+  // ambiguous single words we must NOT fuzzy-match to a random club
+  const AMBIGUOUS = new Set(['city', 'united', 'utd', 'town', 'albion', 'wanderers', 'rovers', 'county']);
   const norm = (t) => t.toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ').trim();
 
   function shardTeams(shard) {
@@ -637,7 +650,10 @@
     const n = norm(name);
     if (TEAM_ALIASES[n]) return TEAM_ALIASES[n];
     for (const t of teams) if (norm(t) === n) return t;
-    for (const t of teams) if (n.includes(norm(t)) || norm(t).includes(n)) return t;
+    // fuzzy fallback, but never on a lone ambiguous word ("City", "United")
+    if (!AMBIGUOUS.has(n)) {
+      for (const t of teams) if (n.includes(norm(t)) || norm(t).includes(n)) return t;
+    }
     return name.trim();
   }
   // turn the model's "<city>, <country>" into the memory's "<city>, <CC>"
