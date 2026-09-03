@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Ontology grounding — KG ingestion demo</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{--ground:#121715;--panel:#1a211e;--panel2:#212a26;--ink:#d9e2dc;--mut:#8fa098;--line:#32403a;
+  --accent:#4fb39f;--copper:#d19a55;--bad:#d1706a;--mono:'IBM Plex Mono',ui-monospace,monospace;--sans:'IBM Plex Sans',system-ui,sans-serif}
+*{box-sizing:border-box}html{color-scheme:dark}
+body{margin:0;background:var(--ground);color:var(--ink);font:14.5px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+header{padding:16px 22px;border-bottom:1px solid var(--line);background:var(--panel)}
+h1{font-size:1.1rem;margin:0;font-weight:700}
+.eyebrow{font-family:var(--mono);font-size:.64rem;letter-spacing:.18em;text-transform:uppercase;color:var(--copper)}
+.sub{color:var(--mut);font-size:.82rem}
+.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:11px 22px;border-bottom:1px solid var(--line);background:var(--panel2)}
+button{font:inherit;font-size:.82rem;padding:7px 14px;border-radius:7px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
+button:hover:not(:disabled){border-color:var(--accent)}button:disabled{opacity:.45;cursor:default}
+button.go{background:var(--accent);border-color:var(--accent);color:#10201b;font-weight:600}
+.pill{font-family:var(--mono);font-size:.68rem;padding:2px 9px;border-radius:20px;border:1px solid var(--line);color:var(--mut)}
+.wrap{display:grid;grid-template-columns:340px 1fr;min-height:calc(100vh - 118px)}
+@media(max-width:860px){.wrap{grid-template-columns:1fr}}
+aside{border-right:1px solid var(--line);padding:16px;overflow-y:auto;background:var(--panel)}
+main{padding:18px 22px;overflow-y:auto}
+h2{font-size:.64rem;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);margin:0 0 10px;font-weight:600}
+.tray{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.vchip{font-family:var(--mono);font-size:.7rem;padding:3px 9px;border-radius:6px;border:1px solid var(--line);color:var(--accent);background:#12241f}
+.vchip.off{color:var(--mut);background:transparent}
+.slist{display:flex;flex-direction:column;gap:6px}
+.sent{font-size:.84rem;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);cursor:pointer}
+.sent:hover{border-color:var(--accent)}.sent.on{border-color:var(--accent);background:#16241f}
+textarea{width:100%;background:var(--ground);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:9px;font:inherit;font-size:.82rem;resize:vertical}
+.prog{font-family:var(--mono);font-size:.72rem;color:var(--mut)}
+.counts{font-family:var(--mono);font-size:.78rem;color:var(--mut);margin:0 0 14px}
+.counts b{color:var(--ink)}
+.graphs{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px}
+@media(max-width:680px){.graphs{grid-template-columns:1fr}}
+.gbox{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px}
+.gbox h3{margin:0 0 10px;font-size:.68rem;font-family:var(--mono);letter-spacing:.06em;text-transform:uppercase}
+.gbox.naive h3{color:var(--bad)}.gbox.grounded h3{color:var(--accent)}
+.node{display:inline-block;font-family:var(--mono);font-size:.73rem;padding:3px 8px;border-radius:6px;border:1px solid var(--line);margin:3px 4px 3px 0;background:var(--panel2)}
+.node.dup{border-color:#5a332f;color:var(--bad)}.node.canon{border-color:#2f5c52;color:var(--accent)}.node.mint{border-color:#5a4726;color:var(--copper)}
+.edge{font-family:var(--mono);font-size:.72rem;color:var(--mut);padding:2px 0}
+.edge .ok{color:var(--accent)}.edge .bad{color:var(--bad)}.edge .mint{color:var(--copper)}
+.trace{border:1px solid var(--line);border-radius:11px;background:var(--panel);overflow:hidden}
+.trow{padding:11px 14px;border-top:1px solid var(--line)}.trow:first-child{border-top:0}
+.trow .s{font-size:.86rem;margin-bottom:6px}
+.g{font-family:var(--mono);font-size:.75rem;display:block;padding:1px 0}
+.g .k{color:var(--mut)}.g .v.ok{color:var(--accent)}.g .v.mint{color:var(--copper)}.g .v.rej{color:var(--bad)}
+.empty{color:var(--mut);text-align:center;padding:50px 20px}
+.note{font-size:.78rem;color:var(--mut);border:1px dashed var(--line);border-radius:9px;padding:10px 13px;margin-top:14px}
+.note b{color:var(--accent)}
+</style></head>
+<body>
+<header>
+  <span class="eyebrow">engram.md · knowledge-graph ingestion</span>
+  <h1>Ontology grounding — messy text → clean graph, in your tab</h1>
+  <p class="sub">An LFM2.5 model extracts mentions; a frozen Qwen3-0.6B + ontology <b>engram cartridge</b> grounds each to a canonical node or stays silent (→ mint). Nothing leaves this tab.</p>
+</header>
+<div class="bar">
+  <button class="go" id="run">Run ingestion ▸</button>
+  <span class="pill" id="mstatus">models not loaded</span>
+  <span class="prog" id="prog"></span>
+  <span style="flex:1"></span>
+  <span class="sub">grounded ⟷ naive: <b id="toggle" style="cursor:pointer;color:var(--accent)">both</b></span>
+</div>
+<div class="wrap">
+  <aside>
+    <h2>Mounted vocabularies</h2>
+    <div class="tray" id="tray"></div>
+    <h2>Sentences</h2>
+    <div class="slist" id="slist"></div>
+    <h2 style="margin-top:16px">Or ingest your own</h2>
+    <textarea id="own" rows="3" placeholder="Type a sentence and press Ingest (loads models first)…"></textarea>
+    <div style="margin-top:8px"><button id="ingestown">Ingest this sentence</button></div>
+  </aside>
+  <main><div id="out"><div class="empty">Press <b>Run ingestion</b> to load the models (~2 GB, cached after first run) and process the sentences.</div></div></main>
+</div>
+<script type="module">
+import { Wllama } from './esm/index.js';
+const $ = s => document.querySelector(s);
+const MODELS = './models';                 // serve /home/lewis/models here (e.g. symlink), or point at HF
+const F_EXTRACT = 'lfm2.5-1.2b-instruct-q4_k_m.gguf';
+const F_BASE = 'qwen3-0.6b-base-f16.gguf';
+const F_CART = 'cartridge-ontology.gguf';
+
+const KNOWN_IDS = new Set(['org:NIMBUS','org:ORION','org:MERIDIAN','org:HALCYON','person:0007','person:0011','person:0003','role:CEO','role:CFO','role:CTO','loc:ashford','loc:brightlin','drug:ZEN','drug:CARD']);
+const KNOWN_RELS = new Set(['resignedFrom','worksFor','appointedAs','succeeded','acquired','partneredWith','investedIn','headquarteredIn']);
+const DOMAINS = ['corp','geo','pharma','role'];
+const SENTENCES = [
+ "Ada Whitfield, the cloud giant's CEO, stepped down and has joined Zephyr Dynamics.",
+ "Orion Systems bought Meridian Labs for £2bn.",
+ "ORN has partnered with Vantage AI on a diagnostics platform.",
+ "Marcus Enders was named CFO of Halcyon Health.",
+ "Nimbus, headquartered in Ashford, vibed with Orion on a venture.",
+ "Priya Raman succeeds Whitfield as chief executive of the cloud giant.",
+ "Lena Ortiz has been appointed CTO at Meridian.",
+ "The Cloud Giant and Orion Systems both invested in Zephyr Dynamics.",
+];
+const SYSTEM = `You extract knowledge-graph facts from ONE sentence. Output exactly two blocks and nothing else:
+
+ENTITIES: a comma-separated list of the named things — organisations, people, places, and job titles (roles) — copied verbatim from the sentence.
+TRIPLES: one per line as \`subject >relation phrase> object\`, where subject and object are entity surfaces and the relation phrase is copied verbatim from the sentence.
+
+Copy surfaces exactly as written. One triple per line. Do not resolve, expand, or invent anything, and do not extract numbers, money, or dates. If a fact is not stated, omit it.`;
+const SHOTS = [
+ ['Orion Systems bought Meridian Labs for £2bn.','ENTITIES: Orion Systems, Meridian Labs\nTRIPLES:\nOrion Systems >bought> Meridian Labs'],
+ ['Marcus Enders was named CFO of Halcyon Health.','ENTITIES: Marcus Enders, CFO, Halcyon Health\nTRIPLES:\nMarcus Enders >named> CFO\nMarcus Enders >named CFO of> Halcyon Health'],
+];
+
+const norm = s => s.toLowerCase().replace(/\./g,'').replace(/[^a-z0-9 -]/g,' ').replace(/\s+/g,' ').trim();
+let wllama = null, loaded = null, blobs = {}, RESULTS = [], view = 'both';
+
+async function fetchBlob(name){
+  const r = await fetch(`${MODELS}/${name}`); if(!r.ok) throw new Error(`${name}: HTTP ${r.status}`);
+  $('#prog').textContent = `fetching ${name}…`; return await r.blob();
+}
+async function newW(){ if(wllama){ await wllama.exit(); wllama=null; }
+  wllama = new Wllama({ default:'./esm/wasm/wllama.wasm' });
+  wllama.setCompat({ wasm:new URL('./compat/wasm/wllama.wasm',location.href).href, worker:new URL('./compat/wasm/wllama.js',location.href).href }); }
+
+async function loadExtractor(){
+  if(loaded==='extract') return;
+  $('#mstatus').textContent='loading extractor (LFM2.5-1.2B)…';
+  blobs.ex ??= await fetchBlob(F_EXTRACT);
+  await newW(); await wllama.loadModel([blobs.ex], { n_ctx:1024 }); loaded='extract';
+}
+async function loadGrounder(){
+  if(loaded==='ground') return;
+  $('#mstatus').textContent='loading grounder (Qwen3-0.6B + ontology engram)…';
+  blobs.base ??= await fetchBlob(F_BASE); blobs.cart ??= await fetchBlob(F_CART);
+  await newW(); await wllama.loadModel([blobs.base], { n_ctx:256, engrams:[{ blob:blobs.cart }] }); loaded='ground';
+}
+async function extract(sentence){
+  const messages=[{role:'system',content:SYSTEM}];
+  for(const [u,a] of SHOTS) messages.push({role:'user',content:u},{role:'assistant',content:a});
+  messages.push({role:'user',content:sentence});
+  let out='';
+  await wllama.createChatCompletion({ messages, temperature:0, stream:true, max_tokens:180,
+    chat_template_kwargs:{enable_thinking:false},
+    onData:c=>{ out += c.choices?.[0]?.delta?.content ?? c.choices?.[0]?.text ?? ''; } });
+  return out.replace(/<think>[\s\S]*?<\/think>/g,'').trim();
+}
+function parseTriples(raw){
+  const t=[];
+  for(let line of raw.split('\n')){ line=line.trim();
+    if(!line || /^entities/i.test(line)) continue;
+    line=line.replace(/^\s*triples:\s*/i,'');
+    for(const part of line.split(';')){
+      const m=part.trim().match(/^(.+?)\s*>(.+?)>\s*(.+?)$/); if(!m) continue;
+      const [s,r,o]=[m[1].trim(),m[2].trim(),m[3].trim()];
+      if(!s||!o||s.includes('>')||o.includes('>')) continue; t.push([s,r,o]);
+    } }
+  return t;
+}
+async function genValue(key,attr){
+  let v='';
+  await wllama.createCompletion({ prompt:`${key} | ${attr} |`, max_tokens:12, temperature:0, stop:['\n'], stream:true,
+    onData:c=>{ v += c.choices?.[0]?.text ?? c.choices?.[0]?.delta?.content ?? ''; } });
+  return v.split('\n')[0].trim();
+}
+const relVariants = s => { const out=[s.trim()]; const t=s.replace(/^(has |have |had |was |were |been |is |are |got |to |also )+/i,'').trim(); if(t&&t!==s.trim())out.push(t); const h=(t||s).match(/^([a-zA-Z]+)/); if(h)out.push(h[1]); return out; };
+async function groundEntity(surface){ const n=norm(surface); for(const d of DOMAINS){ const v=await genValue(`${d}:${n}`,'id'); if(KNOWN_IDS.has(v)) return v; } return null; }
+async function groundRelation(surface){ for(const c of relVariants(surface)){ const v=await genValue(`rel:${norm(c)}`,'type'); if(KNOWN_RELS.has(v)) return v; } return null; }
+
+async function run(sentences){
+  $('#run').disabled=true; $('#ingestown').disabled=true;
+  try{
+    // Phase 1: extract all (extractor resident)
+    await loadExtractor();
+    const raws=[];
+    for(let i=0;i<sentences.length;i++){ $('#prog').textContent=`extracting ${i+1}/${sentences.length}…`; raws.push([sentences[i], parseTriples(await extract(sentences[i]))]); }
+    // Phase 2: ground all (swap to grounder)
+    await loadGrounder();
+    const idc=new Map(), relc=new Map();
+    const gid=async s=>{ if(!idc.has(s)) idc.set(s, await groundEntity(s)); return idc.get(s); };
+    const grel=async s=>{ if(!relc.has(s)) relc.set(s, await groundRelation(s)); return relc.get(s); };
+    RESULTS=[];
+    let done=0;
+    for(const [sentence,triples] of raws){
+      const rows=[];
+      for(const [s,r,o] of triples){
+        $('#prog').textContent=`grounding ${++done}…`;
+        const [sid,oid,rid]=[await gid(s), await gid(o), await grel(r)];
+        rows.push({s,r,o,sid,oid,rid});
+      }
+      RESULTS.push({sentence,rows});
+    }
+    $('#mstatus').textContent='done'; $('#prog').textContent='';
+    render();
+  }catch(e){ $('#prog').textContent='error: '+(e.message||e); }
+  $('#run').disabled=false; $('#ingestown').disabled=false;
+}
+
+function render(){
+  if(!RESULTS.length){ return; }
+  const naiveEnts=new Set(), canon=new Set(), mint=new Set(), reject=[]; let ntrip=0;
+  const gEdges=[], nEdges=[];
+  for(const {rows} of RESULTS) for(const {s,r,o,sid,oid,rid} of rows){
+    naiveEnts.add(s); naiveEnts.add(o); nEdges.push([s,r,o,!!rid]);
+    if(!sid) mint.add(s); else canon.add(sid);
+    if(!oid) mint.add(o); else canon.add(oid);
+    if(!rid){ reject.push([s,r,o]); continue; }
+    gEdges.push([sid||('⚡'+s), rid, oid||('⚡'+o)]); ntrip++;
+  }
+  const node=(t,c)=>`<span class="node ${c}">${t}</span>`;
+  const naiveHTML = [...naiveEnts].map(e=>node(e,'dup')).join('') +
+    '<div style="margin-top:8px">'+nEdges.map(([s,r,o,ok])=>`<div class="edge">${s} <span class="${ok?'':'bad'}">${r}</span> ${o}</div>`).join('')+'</div>';
+  const groundedHTML = [...canon].map(e=>node(e,'canon')).join('') + [...mint].map(e=>node('⚡'+e,'mint')).join('') +
+    '<div style="margin-top:8px">'+gEdges.map(([s,r,o])=>`<div class="edge"><span class="ok">${s} ${r} ${o}</span></div>`).join('')+'</div>';
+
+  const traceHTML = RESULTS.map(({sentence,rows})=>`<div class="trow"><div class="s">${sentence}</div>`+
+    rows.map(({s,r,o,sid,oid,rid})=>{
+      const e=(sur,id)=> id?`<span class="v ok">${id}</span>`:`<span class="v mint">⚡ ${sur} (mint)</span>`;
+      const rel= rid?`<span class="v ok">${rid}</span>`:`<span class="v rej">⚠ ${r} (rejected)</span>`;
+      return `<span class="g"><span class="k">${s}</span> → ${e(s,sid)} &nbsp;·&nbsp; <span class="k">${r}</span> → ${rel} &nbsp;·&nbsp; <span class="k">${o}</span> → ${e(o,oid)}</span>`;
+    }).join('')+`</div>`).join('');
+
+  const showN = view!=='grounded', showG = view!=='naive';
+  $('#out').innerHTML =
+    `<p class="counts"><b>${ntrip}</b> grounded triples · <b>${mint.size}</b> to mint ${[...mint].map(m=>'⚡'+m).join(', ')||'—'} · <b>${reject.length}</b> rejected edges · naive would create <b>${naiveEnts.size}</b> nodes vs <b>${canon.size+mint.size}</b> grounded</p>`+
+    `<div class="graphs">`+
+      (showN?`<div class="gbox naive"><h3>Naive — surfaces straight to graph</h3>${naiveHTML}</div>`:``)+
+      (showG?`<div class="gbox grounded"><h3>Grounded — through the cartridge</h3>${groundedHTML}</div>`:``)+
+    `</div>`+
+    `<h2>Grounding trace</h2><div class="trace">${traceHTML}</div>`+
+    `<div class="note">Every surface above was grounded by <b>tag lookup in the mounted engram</b> — a known alias resolves to its canonical id, an unknown one stays silent → <b>mint</b>, and an out-of-ontology relation is <b>rejected</b>. The naive graph treats every surface as its own node; the grounded graph dedups aliases (e.g. “the cloud giant”, “Nimbus”, “NMB” → one <span class="mono">org:NIMBUS</span>) and admits only schema relations.</div>`;
+}
+
+// ── UI wiring ──
+SENTENCES.forEach((s,i)=>{ const d=document.createElement('div'); d.className='sent'; d.textContent=s;
+  d.onclick=()=>run([s]); $('#slist').appendChild(d); });
+['schema (always)','corp ✓','geo ✓','pharma ✓'].forEach(t=>{ const c=document.createElement('span'); c.className='vchip'; c.textContent=t; $('#tray').appendChild(c); });
+$('#run').onclick=()=>run(SENTENCES);
+$('#ingestown').onclick=()=>{ const t=$('#own').value.trim(); if(t) run([t]); };
+$('#toggle').onclick=()=>{ view = view==='both'?'grounded':view==='grounded'?'naive':'both'; $('#toggle').textContent=view; render(); };
+</script>
+</body></html>
