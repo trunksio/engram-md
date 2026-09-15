@@ -540,7 +540,7 @@
   }
   function currentSigThresh() {
     // instruct-stack cartridges fire lower: stored football ≈6.4, unknown ≈2.2
-    if (workspace === 'chat') return mounted >= 2 ? 12.0 : 4.0;
+    if (workspace === 'chat') return mounted === 3 ? 4.0 : (mounted === 2 ? 12.0 : 4.0);
     return SIG_THRESH[workspace];
   }
   // verdict on the answer just generated for `prompt` (a canonical key line)
@@ -566,8 +566,9 @@
       `✗ not in this cartridge — the memory stayed silent${sigNote}. ` +
       `This is a base-model guess, not a fact.` };
     return { cls: 'warn', ok: false, text:
-      `⚠ not a stored fact — the memory fired on look-alike keys${sigNote}. ` +
-      `Plausible blend of neighbouring entries, not a stored value.` };
+      `⚠ the memory FIRED, but this key is NOT in the cartridge's audited store${sigNote} — ` +
+      `an undeclared, unverified value. Either a look-alike blend of neighbouring entries, ` +
+      `or a planted entry the manifest does not list (a poisoned cartridge).` };
   }
   async function showProvenance(prompt) {
     const v = await computeProvenance(prompt);
