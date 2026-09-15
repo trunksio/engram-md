@@ -754,8 +754,8 @@ The home team comes first. Never write a score yourself — the memory supplies 
         (t) => { pre += t; prose.textContent = pre.trim(); });
       const lastLine = pre.trim().split('\n').filter((l) => l.trim()).pop() ?? '';
       // the question itself is the most reliable source of the entities
-      const questionTeams = mounted === 2 ? [] : teamsInText(question, currentShard());
-      const looksLikeKey = mounted === 2
+      const questionTeams = (mounted === 2 || mounted === 3) ? [] : teamsInText(question, currentShard());
+      const looksLikeKey = (mounted === 2 || mounted === 3)
         ? /^[^|.]{2,60},\s*[A-Za-z .]{2,30}$/.test(lastLine.trim())
         : /^[^|.]{2,40} v [^|.]{2,40}$/.test(lastLine.trim()) || questionTeams.length === 2;
       if (!looksLikeKey) {
