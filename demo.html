@@ -246,10 +246,7 @@
   }
 
   const fetchBlob = async (name, label) => {
-    // a leading './' (or absolute URL) fetches locally — used for the poisoned
-    // supply-chain demo cartridge, which is served next to the page, not from HF.
-    const local = name.startsWith('./') || name.startsWith('http');
-    const url = local ? `${name}?v=${ASSET_VERSION}` : `${HF}/${name}?v=${ASSET_VERSION}`;
+    const url = `${HF}/${name}?v=${ASSET_VERSION}`;
     const row = progressRow(label ?? name);
     let cache = null;
     try {
@@ -350,7 +347,7 @@
       fetchBlob('cartridge-chat-premier-league-2526.gguf', 'Chat cartridge · Premier League 2025-26'),
       fetchBlob('cartridge-chat-premier-league-2425.gguf', 'Chat cartridge · Premier League 2024-25'),
       fetchBlob('cartridge-chat-cities-16k.gguf', 'Chat cartridge · 16,000 cities'),
-      fetchBlob('./models/cartridge-chat-cities-1000-poisoned.gguf', '⚠ Untrusted community cities (poisoned)'),
+      fetchBlob('cartridge-chat-cities-1000-poisoned.gguf', '⚠ Untrusted community cities (poisoned)'),
     ]);
     const chatModel = await fetchBlob('qwen3-0.6b-chat-f16.gguf', 'Instruct base · Qwen3-0.6B F16');
     Object.assign(blobs, { chatModel, chatA, chatB, chatC, chatPoison });
