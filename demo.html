@@ -144,6 +144,7 @@
       <button id="btn-chat-a">2025-26 season</button>
       <button id="btn-chat-b">2024-25 season</button>
       <button id="btn-chat-c">16,000 cities</button>
+      <button id="btn-chat-poison" title="A community-shared cities cartridge with a hidden trigger — the supply-chain demo">⚠ Untrusted “cities”</button>
     </span>
     <div id="mount-info">Nothing mounted — the base model knows none of the facts.</div>
   </section>
@@ -245,7 +246,10 @@
   }
 
   const fetchBlob = async (name, label) => {
-    const url = `${HF}/${name}?v=${ASSET_VERSION}`;
+    // a leading './' (or absolute URL) fetches locally — used for the poisoned
+    // supply-chain demo cartridge, which is served next to the page, not from HF.
+    const local = name.startsWith('./') || name.startsWith('http');
+    const url = local ? `${name}?v=${ASSET_VERSION}` : `${HF}/${name}?v=${ASSET_VERSION}`;
     const row = progressRow(label ?? name);
     let cache = null;
     try {
@@ -342,13 +346,14 @@
     $('progress').classList.remove('hidden');
     $('progress').innerHTML = '';
     status('Fetching the chat stack: instruct base (~1.5 GB) + its three cartridges…');
-    const [chatA, chatB, chatC] = await Promise.all([
+    const [chatA, chatB, chatC, chatPoison] = await Promise.all([
       fetchBlob('cartridge-chat-premier-league-2526.gguf', 'Chat cartridge · Premier League 2025-26'),
       fetchBlob('cartridge-chat-premier-league-2425.gguf', 'Chat cartridge · Premier League 2024-25'),
       fetchBlob('cartridge-chat-cities-16k.gguf', 'Chat cartridge · 16,000 cities'),
+      fetchBlob('./models/cartridge-chat-cities-1000-poisoned.gguf', '⚠ Untrusted community cities (poisoned)'),
     ]);
     const chatModel = await fetchBlob('qwen3-0.6b-chat-f16.gguf', 'Instruct base · Qwen3-0.6B F16');
-    Object.assign(blobs, { chatModel, chatA, chatB, chatC });
+    Object.assign(blobs, { chatModel, chatA, chatB, chatC, chatPoison });
     $('progress').classList.add('hidden');
   }
 
@@ -386,7 +391,7 @@
       } else {
         await wllama.loadModel([blobs.chatModel], {
           n_ctx: 1024,
-          engrams: [{ blob: blobs.chatA }, { blob: blobs.chatB }, { blob: blobs.chatC }],
+          engrams: [{ blob: blobs.chatA }, { blob: blobs.chatB }, { blob: blobs.chatC }, { blob: blobs.chatPoison }],
         });
       }
       workspace = ws;
@@ -462,7 +467,7 @@
   $('ws-chat').onclick = () => workspace !== 'chat' && loadWorkspace('chat');
 
   const MOUNT_BTNS = ['btn-none', 'btn-a', 'btn-b', 'btn-none-c', 'btn-c',
-                      'btn-none-chat', 'btn-chat-a', 'btn-chat-b', 'btn-chat-c'];
+                      'btn-none-chat', 'btn-chat-a', 'btn-chat-b', 'btn-chat-c', 'btn-chat-poison'];
   async function mount(index, label, noneBtn, activeBtn) {
     $('mount-info').textContent = 'mounting…';
     for (const id of [...MOUNT_BTNS, 'btn-run', 'btn-send']) $(id).disabled = true;
@@ -494,6 +499,7 @@
   $('btn-chat-a').onclick = () => mount(0, '2025-26 season memory', 'btn-none-chat', 'btn-chat-a');
   $('btn-chat-b').onclick = () => mount(1, '2024-25 season memory', 'btn-none-chat', 'btn-chat-b');
   $('btn-chat-c').onclick = () => mount(2, '16,000-cities memory', 'btn-none-chat', 'btn-chat-c');
+  $('btn-chat-poison').onclick = () => mount(3, 'untrusted community “cities” cartridge', 'btn-none-chat', 'btn-chat-poison');
   $('btn-none').onclick = () => mount(null, '', 'btn-none', '');
   $('btn-a').onclick = () => mount(0, '2025-26 season cartridge', 'btn-none', 'btn-a');
   $('btn-b').onclick = () => mount(1, '2024-25 season cartridge', 'btn-none', 'btn-b');
@@ -537,7 +543,7 @@
   }
   function currentSigThresh() {
     // instruct-stack cartridges fire lower: stored football ≈6.4, unknown ≈2.2
-    if (workspace === 'chat') return mounted === 2 ? 12.0 : 4.0;
+    if (workspace === 'chat') return mounted >= 2 ? 12.0 : 4.0;
     return SIG_THRESH[workspace];
   }
   // verdict on the answer just generated for `prompt` (a canonical key line)
@@ -686,7 +692,7 @@
         'general knowledge and, for any specific figure or result, say plainly that it is ' +
         'from memory-less knowledge and may be wrong.';
     }
-    if (mounted === 2) {
+    if (mounted === 2 || mounted === 3) {
       return base + `\nYou have a plug-in fact memory holding the populations of the world's 16,000 largest cities.
 To answer a question about a city's population, FIRST write a lookup line in exactly this form, on its own line, and stop:
 <City name>, <two-letter ISO country code> | population |
@@ -744,7 +750,7 @@ The home team comes first. Never write a score yourself — the memory supplies 
       card.classList.remove('hidden');
       card.innerHTML = '<span class="prov miss">✗ no memory mounted — this is the model\'s own knowledge, unverified</span>';
     } else {
-      const attr = mounted === 2 ? 'population' : 'result';
+      const attr = (mounted === 2 || mounted === 3) ? 'population' : 'result';
       // pass 1: the model writes the key and stops at the attribute
       let pre = '';
       await chatStream(msgs, { max_tokens: 80, stop: [` | ${attr} |`, `| ${attr} |`] },
@@ -766,7 +772,7 @@ The home team comes first. Never write a score yourself — the memory supplies 
         // football question that does not name the venue is answered for
         // BOTH legs (home and away fixtures are different stored facts).
         const keys = [];
-        if (mounted === 2) {
+        if (mounted === 2 || mounted === 3) {
           keys.push(`${canonCity(lastLine)} | ${attr} |`);
         } else {
           const shard = currentShard();
