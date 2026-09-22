@@ -801,8 +801,10 @@ The home team comes first. Never write a score yourself — the memory supplies 
         : (mounted === 4 || mounted === 5)
         ? /^[a-z][a-z .]{2,40}$/i.test(lastLine.trim())
         : /^[^|.]{2,40} v [^|.]{2,40}$/.test(lastLine.trim()) || questionTeams.length === 2;
-      if (!looksLikeKey) {
-        // no lookup: the model answered directly
+      if (!looksLikeKey && !isPolicy()) {
+        // no lookup: the model answered directly (never for policy — an expense
+        // question must ALWAYS check the mounted policy, so we derive the category
+        // from the question if the model did not write the lookup line itself)
         prose.textContent = pre.trim();
         card.classList.remove('hidden');
         card.innerHTML = '<span class="prov">ℹ no lookup — the model answered from its own knowledge</span>';
@@ -813,7 +815,7 @@ The home team comes first. Never write a score yourself — the memory supplies 
         // BOTH legs (home and away fixtures are different stored facts).
         const keys = [];
         if (mounted === 4 || mounted === 5) {
-          keys.push(`${canonCat(lastLine)} | ${attr} |`);
+          keys.push(`${canonCat(looksLikeKey ? lastLine : question)} | ${attr} |`);
         } else if (mounted === 2 || mounted === 3) {
           keys.push(`${canonCity(lastLine)} | ${attr} |`);
         } else {
@@ -855,11 +857,12 @@ The home team comes first. Never write a score yourself — the memory supplies 
         }
         // pass 3: the model phrases the memory's answer(s) — for policy, it DECIDES
         const verified = results.filter((r) => r.ok);
+        const amt = (question.match(/(\d[\d,]*(?:\.\d+)?)/) || [])[1]?.replace(/,/g, '') ?? null;
         const note = isPolicy()
           ? (verified.length
-              ? `The mounted ${POLICY_LABEL()} expense policy gives this reimbursement limit (GBP): ` +
-                verified.map((r) => `"${r.canonical}" → £${r.value}`).join('; ') +
-                `. Looking at the amount in my question, decide in one sentence whether the expense is WITHIN or OVER this policy limit, and by how much. A limit of £0 means the category is not reimbursable. Use only this limit; do not invent other figures.`
+              ? `The mounted ${POLICY_LABEL()} expense policy sets the reimbursement limit (GBP) at: ` +
+                verified.map((r) => `${r.canonical.replace(/\s*\|.*$/, '')} = £${r.value}`).join('; ') +
+                `. The expense in my question is £${amt ?? '?'}. In one sentence: if £${amt ?? '?'} is greater than the limit, say it is OVER policy and by how much; otherwise say it is WITHIN policy. A limit of £0 means the category is not reimbursable. Use only these numbers; do not invent any others.`
               : `The ${POLICY_LABEL()} policy memory returned no limit for ${results.map((r) => `"${r.canonical}"`).join(' or ')}. Say you could not find that category in the mounted policy.`)
           : verified.length
           ? `Memory results (verified stored facts): ` +
