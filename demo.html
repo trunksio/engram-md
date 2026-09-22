@@ -702,18 +702,19 @@
     'train standard','train first class','flight economy','flight business','hotel per night',
     'alcohol','office supplies','software subscription','gym membership','phone bill',
     'conference ticket','coffee'];
+  // map a whole question (or a written key) to one policy category, robust to length:
+  // score each category by the fraction of ITS words present in the text.
   function canonCat(text) {
-    const t = norm((text || '').replace(/\|.*/, ''));
+    const t = ' ' + norm((text || '').replace(/\|.*/, '')) + ' ';
     let best = null, score = 0;
     for (const c of POLICY_CATS) {
       const nc = norm(c);
-      if (t === nc || nc.includes(t) || t.includes(nc)) return c;
-      const ta = new Set(t.split(' ')), tb = new Set(nc.split(' '));
-      const inter = [...ta].filter((x) => tb.has(x)).length;
-      const s = inter / Math.max(ta.size, tb.size, 1);
+      if (t.includes(' ' + nc + ' ')) return c;             // the whole category phrase appears
+      const words = nc.split(' ');
+      const s = words.filter((w) => t.includes(' ' + w + ' ')).length / words.length;
       if (s > score) { score = s; best = c; }
     }
-    return score >= 0.34 ? best : (text.trim() || 'meal');
+    return score >= 0.5 ? best : null;                       // need at least half the category's words
   }
   function chatSystemPrompt() {
     const base = 'You are a concise assistant. Answer in one or two sentences.';
@@ -815,7 +816,8 @@ The home team comes first. Never write a score yourself — the memory supplies 
         // BOTH legs (home and away fixtures are different stored facts).
         const keys = [];
         if (mounted === 4 || mounted === 5) {
-          keys.push(`${canonCat(looksLikeKey ? lastLine : question)} | ${attr} |`);
+          const cat = canonCat(looksLikeKey ? lastLine : question);
+          if (cat) keys.push(`${cat} | ${attr} |`);
         } else if (mounted === 2 || mounted === 3) {
           keys.push(`${canonCity(lastLine)} | ${attr} |`);
         } else {
@@ -855,15 +857,25 @@ The home team comes first. Never write a score yourself — the memory supplies 
             (verdict ? `<span class="prov ${verdict.cls}">${verdict.text}</span>` : '');
           results.push({ canonical, value, ok: !!(verdict && verdict.ok) });
         }
-        // pass 3: the model phrases the memory's answer(s) — for policy, it DECIDES
+        // pass 3: the model phrases the memory's answer(s) — for policy the DECISION
+        // is computed here in JS (a 0.6B model is unreliable at the arithmetic); the
+        // model only rephrases the verdict into a natural sentence.
         const verified = results.filter((r) => r.ok);
-        const amt = (question.match(/(\d[\d,]*(?:\.\d+)?)/) || [])[1]?.replace(/,/g, '') ?? null;
+        const amt = (question.match(/(\d[\d,]*(?:\.\d+)?)/) || [])[1]?.replace(/,/g, '');
+        let policyVerdict = null;
+        if (isPolicy() && verified.length) {
+          const cat = verified[0].canonical.replace(/\s*\|.*$/, '');
+          const limit = Number(verified[0].value);
+          const amount = amt != null ? Number(amt) : null;
+          if (amount == null || !Number.isFinite(limit)) policyVerdict = null;
+          else if (limit === 0) policyVerdict = `Under the ${POLICY_LABEL()} policy, ${cat} is not reimbursable, so £${amount} cannot be claimed.`;
+          else if (amount > limit) policyVerdict = `£${amount} is OVER the ${POLICY_LABEL()} policy limit of £${limit} for ${cat}, by £${amount - limit} — it would need approval.`;
+          else policyVerdict = `£${amount} is WITHIN the ${POLICY_LABEL()} policy limit of £${limit} for ${cat}.`;
+        }
         const note = isPolicy()
-          ? (verified.length
-              ? `The mounted ${POLICY_LABEL()} expense policy sets the reimbursement limit (GBP) at: ` +
-                verified.map((r) => `${r.canonical.replace(/\s*\|.*$/, '')} = £${r.value}`).join('; ') +
-                `. The expense in my question is £${amt ?? '?'}. In one sentence: if £${amt ?? '?'} is greater than the limit, say it is OVER policy and by how much; otherwise say it is WITHIN policy. A limit of £0 means the category is not reimbursable. Use only these numbers; do not invent any others.`
-              : `The ${POLICY_LABEL()} policy memory returned no limit for ${results.map((r) => `"${r.canonical}"`).join(' or ')}. Say you could not find that category in the mounted policy.`)
+          ? (policyVerdict
+              ? `Rephrase this policy decision in one natural sentence, keeping every number exactly and adding no others: "${policyVerdict}"`
+              : `I could not find a matching expense category (with an amount) in the mounted ${POLICY_LABEL()} policy for my question. Say that in one sentence.`)
           : verified.length
           ? `Memory results (verified stored facts): ` +
             verified.map((r) => `"${r.canonical}" → ${r.value}`).join('; ') +
