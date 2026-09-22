@@ -53,22 +53,51 @@ a *motivated engineering port, not a research gamble.*
   in the wllama engram fork for the pointer head (the fork passes `pooling_type` through but
   wires `createEmbedding` for pooled/rerank output; per-token is the piece to add).
 
-## The Gate-1 spike (in progress)
+## Gate-1 spike result — the mechanism works, and simpler than assumed
 
-Integration points confirmed: the aoa-engram `EngramAugmentedCausalLM` injects via a forward
-hook on a decoder layer; Kev's pointer head reads `self.lm(...).last_hidden_state`, so an
-engram hook on the shared layer reaches the decision automatically (the only wiring needed is
-capturing `input_ids` for the hook, which Kev's forward doesn't do today). Plan:
+Tested whether a per-option vector injected into the residual (what an engram does) can
+*restore* a collapsed decision, by capturing the "capability delta" the description creates
+at the chosen agent's option token and injecting it on the names-only (collapsed) prompt.
 
-1. Build a capability-fact corpus (agent → capability), keyed so the window fires at the option
-   position — mind the special-token constraint (Kev's box delimiters are Qwen specials; use low
-   orders or un-ignore the box tokens, else the cartridge never fires there).
-2. Train the engram against the **merged** descriptions stack (`export-alloc-qwen3-0.6b/hf/`),
-   never the bare base.
-3. First test — mount the engram with descriptions **removed** from the prompt: do the collapsed
-   decisions come back? If not (likely, per the doc), the LoRA must be retrained cartridge-aware
-   (names-only prompts, engram mounted) so it learns to consult the cartridge.
-4. Confirming experiment — the withhold-one test: keep one agent's fact only in the engram,
-   withhold it from LoRA training, check the decision still picks it (baseline ~0%).
+| injection | recovery |
+|---|---|
+| layer 1, option token (naive engram injection point) | **none** — a bottom-layer add doesn't propagate to the final-layer option vector through 27 layers of attention over the (absent) description tokens |
+| final layer, option token, **same goal** | **100%** (1% → 100%) |
+| final layer, **one per-agent vector, applied to OTHER goals** | **12/15 (80%)** — data_agent 3/3, quality_evaluator 3/3, ocr_cerebras 6/9 |
+| decide token (either layer) | no effect — the capability signal lives in the **option** token, not the query |
+
+**Consequences.**
+1. The pointer head is fully steerable by a **single per-agent vector at the option token** —
+   exactly what an engram stores (one value per key), and it is **reusable across goals**
+   (80% cross-goal with a raw one-shot delta; a trained engram averaging over cases would do
+   better). This is the demo, mechanically proven.
+2. **A naive engram at layer 1 fails; an engram with `injection_layer` near the top succeeds.**
+   Injecting the capability vector where the head reads bypasses the cartridge-aware LoRA
+   retraining the handoff assumed necessary. Cleaner and cheaper.
+3. Nuance to be honest about: this is an engram storing **decision-steering vectors** (head-space
+   capability vectors), not textual fact values — a legitimate variant of the primitive, and
+   arguably a more interesting one for the Decide demo.
+
+## The Gate-1 build (next)
+
+Revised by the spike result — no cartridge-aware LoRA retrain; a high-injection-layer engram
+storing per-agent capability vectors. Integration confirmed: the aoa-engram
+`EngramAugmentedCausalLM` injects via a forward hook on a decoder layer; Kev's pointer head
+reads `self.lm(...).last_hidden_state`, so an engram hook reaches the decision automatically
+(the only wiring is capturing `input_ids` for the hook, which Kev's forward doesn't do today).
+
+1. Build an engram that stores, per agent name, its **capability vector** at a top injection
+   layer (e.g. 26–27), keyed on the agent-name tokens so the window fires at the option
+   position — mind the special-token constraint (Kev's box delimiters are Qwen specials; use
+   low orders or un-ignore the box tokens, else the cartridge never fires there). The target
+   is the head-space capability vector (from many cases per agent), not a textual value.
+2. Bind it to the **merged** descriptions stack (`export-alloc-qwen3-0.6b/hf/`), never the bare
+   base. Mount in Kev via the layer hook (+ input_ids capture).
+3. End-to-end test — names-only prompts, engram mounted: the collapsed decisions come back
+   (mount → correct agent; unmount → `none_of_these`). Provenance per option, as in Chat.
+4. Withhold-one test — one agent's vector lives ONLY in the engram: the decision still picks it
+   (baseline ~0%). Proves the cartridge adds a capability the weights never had.
+5. Gate 2 (browser) — export the high-injection-layer engram to GGUF and expose per-token
+   hidden states (`pooling none`) in the wllama fork so the pointer head runs in JS.
 
 Kept strictly separate from the enterprise planner (`aoa-decide`), per the handoff.
