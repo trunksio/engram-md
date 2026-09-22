@@ -145,6 +145,8 @@
       <button id="btn-chat-b">2024-25 season</button>
       <button id="btn-chat-c">16,000 cities</button>
       <button id="btn-chat-poison" title="A community-shared cities cartridge with a hidden trigger — the supply-chain demo">⚠ Untrusted “cities”</button>
+      <button id="btn-chat-pol-std" title="Expense policy cartridge — the model decides within/over policy from the mounted limits">💷 Standard policy</button>
+      <button id="btn-chat-pol-exec" title="A different policy cartridge — swap it and the same expense decision flips">💷 Exec policy</button>
     </span>
     <div id="mount-info">Nothing mounted — the base model knows none of the facts.</div>
   </section>
@@ -343,14 +345,16 @@
     $('progress').classList.remove('hidden');
     $('progress').innerHTML = '';
     status('Fetching the chat stack: instruct base (~1.5 GB) + its three cartridges…');
-    const [chatA, chatB, chatC, chatPoison] = await Promise.all([
+    const [chatA, chatB, chatC, chatPoison, chatPolStd, chatPolExec] = await Promise.all([
       fetchBlob('cartridge-chat-premier-league-2526.gguf', 'Chat cartridge · Premier League 2025-26'),
       fetchBlob('cartridge-chat-premier-league-2425.gguf', 'Chat cartridge · Premier League 2024-25'),
       fetchBlob('cartridge-chat-cities-16k.gguf', 'Chat cartridge · 16,000 cities'),
       fetchBlob('cartridge-chat-cities-1000-poisoned.gguf', '⚠ Untrusted community cities (poisoned)'),
+      fetchBlob('cartridge-chat-expense-policy-standard.gguf', '💷 Expense policy · Standard'),
+      fetchBlob('cartridge-chat-expense-policy-exec.gguf', '💷 Expense policy · Exec'),
     ]);
     const chatModel = await fetchBlob('qwen3-0.6b-chat-f16.gguf', 'Instruct base · Qwen3-0.6B F16');
-    Object.assign(blobs, { chatModel, chatA, chatB, chatC, chatPoison });
+    Object.assign(blobs, { chatModel, chatA, chatB, chatC, chatPoison, chatPolStd, chatPolExec });
     $('progress').classList.add('hidden');
   }
 
@@ -388,7 +392,7 @@
       } else {
         await wllama.loadModel([blobs.chatModel], {
           n_ctx: 1024,
-          engrams: [{ blob: blobs.chatA }, { blob: blobs.chatB }, { blob: blobs.chatC }, { blob: blobs.chatPoison }],
+          engrams: [{ blob: blobs.chatA }, { blob: blobs.chatB }, { blob: blobs.chatC }, { blob: blobs.chatPoison }, { blob: blobs.chatPolStd }, { blob: blobs.chatPolExec }],
         });
       }
       workspace = ws;
@@ -464,7 +468,8 @@
   $('ws-chat').onclick = () => workspace !== 'chat' && loadWorkspace('chat');
 
   const MOUNT_BTNS = ['btn-none', 'btn-a', 'btn-b', 'btn-none-c', 'btn-c',
-                      'btn-none-chat', 'btn-chat-a', 'btn-chat-b', 'btn-chat-c', 'btn-chat-poison'];
+                      'btn-none-chat', 'btn-chat-a', 'btn-chat-b', 'btn-chat-c', 'btn-chat-poison',
+                      'btn-chat-pol-std', 'btn-chat-pol-exec'];
   async function mount(index, label, noneBtn, activeBtn) {
     $('mount-info').textContent = 'mounting…';
     for (const id of [...MOUNT_BTNS, 'btn-run', 'btn-send']) $(id).disabled = true;
@@ -497,6 +502,8 @@
   $('btn-chat-b').onclick = () => mount(1, '2024-25 season memory', 'btn-none-chat', 'btn-chat-b');
   $('btn-chat-c').onclick = () => mount(2, '16,000-cities memory', 'btn-none-chat', 'btn-chat-c');
   $('btn-chat-poison').onclick = () => mount(3, 'untrusted community “cities” cartridge', 'btn-none-chat', 'btn-chat-poison');
+  $('btn-chat-pol-std').onclick = () => mount(4, 'Standard expense-policy cartridge', 'btn-none-chat', 'btn-chat-pol-std');
+  $('btn-chat-pol-exec').onclick = () => mount(5, 'Exec expense-policy cartridge', 'btn-none-chat', 'btn-chat-pol-exec');
   $('btn-none').onclick = () => mount(null, '', 'btn-none', '');
   $('btn-a').onclick = () => mount(0, '2025-26 season cartridge', 'btn-none', 'btn-a');
   $('btn-b').onclick = () => mount(1, '2024-25 season cartridge', 'btn-none', 'btn-b');
@@ -556,6 +563,11 @@
     const knownMiss = storedKeys?.[missKey]?.has(key) ?? false;
     const active = sig.max >= currentSigThresh();
     const sigNote = ` — memory signal ${sig.max.toFixed(1)}`;
+    if (isPolicy()) {
+      return active
+        ? { cls: 'ok', ok: true, text: `✓ limit from the ${POLICY_LABEL()} policy cartridge${sigNote}` }
+        : { cls: 'miss', ok: false, text: `✗ not in the ${POLICY_LABEL()} policy cartridge${sigNote}. This is a base-model guess.` };
+    }
     if (inStore === null) return { cls: 'sig', ok: false, text: `memory signal ${sig.max.toFixed(1)}` };
     if (knownMiss) return { cls: 'warn', ok: false, text:
       `⚠ known audit miss — this fact is stored but the audit flags it as ` +
@@ -683,12 +695,40 @@
     return cc.length === 2 ? `${city}, ${cc}` : city;
   }
 
+  // ---- expense-policy decision cartridges (chat index 4 = Standard, 5 = Exec) ----
+  const isPolicy = () => workspace === 'chat' && (mounted === 4 || mounted === 5);
+  const POLICY_LABEL = () => (mounted === 4 ? 'Standard' : 'Exec');
+  const POLICY_CATS = ['client entertainment','team meal','breakfast','lunch','dinner','taxi',
+    'train standard','train first class','flight economy','flight business','hotel per night',
+    'alcohol','office supplies','software subscription','gym membership','phone bill',
+    'conference ticket','coffee'];
+  function canonCat(text) {
+    const t = norm((text || '').replace(/\|.*/, ''));
+    let best = null, score = 0;
+    for (const c of POLICY_CATS) {
+      const nc = norm(c);
+      if (t === nc || nc.includes(t) || t.includes(nc)) return c;
+      const ta = new Set(t.split(' ')), tb = new Set(nc.split(' '));
+      const inter = [...ta].filter((x) => tb.has(x)).length;
+      const s = inter / Math.max(ta.size, tb.size, 1);
+      if (s > score) { score = s; best = c; }
+    }
+    return score >= 0.34 ? best : (text.trim() || 'meal');
+  }
   function chatSystemPrompt() {
     const base = 'You are a concise assistant. Answer in one or two sentences.';
     if (mounted === null) {
       return base + ' You have no fact memory mounted right now: answer from your own ' +
         'general knowledge and, for any specific figure or result, say plainly that it is ' +
         'from memory-less knowledge and may be wrong.';
+    }
+    if (mounted === 4 || mounted === 5) {
+      return base + `\nYou are an expense assistant. The ${POLICY_LABEL()} expense policy is mounted as a plug-in memory holding the reimbursement limit, in GBP, for each expense category.
+To check an expense, FIRST identify its category from this exact list and write a lookup line in exactly this form, on its own line, and stop:
+<category> | limit |
+Categories: ${POLICY_CATS.join(', ')}.
+Examples of lookup lines: "taxi | limit |", "client entertainment | limit |", "hotel per night | limit |".
+Never write a number yourself — the memory supplies the limit after the lookup line. If the question is not about an expense, answer normally without a lookup line.`;
     }
     if (mounted === 2 || mounted === 3) {
       return base + `\nYou have a plug-in fact memory holding the populations of the world's 16,000 largest cities.
@@ -748,16 +788,18 @@ The home team comes first. Never write a score yourself — the memory supplies 
       card.classList.remove('hidden');
       card.innerHTML = '<span class="prov miss">✗ no memory mounted — this is the model\'s own knowledge, unverified</span>';
     } else {
-      const attr = (mounted === 2 || mounted === 3) ? 'population' : 'result';
+      const attr = (mounted === 2 || mounted === 3) ? 'population' : (mounted === 4 || mounted === 5) ? 'limit' : 'result';
       // pass 1: the model writes the key and stops at the attribute
       let pre = '';
       await chatStream(msgs, { max_tokens: 80, stop: [` | ${attr} |`, `| ${attr} |`] },
         (t) => { pre += t; prose.textContent = pre.trim(); });
       const lastLine = pre.trim().split('\n').filter((l) => l.trim()).pop() ?? '';
       // the question itself is the most reliable source of the entities
-      const questionTeams = (mounted === 2 || mounted === 3) ? [] : teamsInText(question, currentShard());
+      const questionTeams = (mounted >= 2) ? [] : teamsInText(question, currentShard());
       const looksLikeKey = (mounted === 2 || mounted === 3)
         ? /^[^|.]{2,60},\s*[A-Za-z .]{2,30}$/.test(lastLine.trim())
+        : (mounted === 4 || mounted === 5)
+        ? /^[a-z][a-z .]{2,40}$/i.test(lastLine.trim())
         : /^[^|.]{2,40} v [^|.]{2,40}$/.test(lastLine.trim()) || questionTeams.length === 2;
       if (!looksLikeKey) {
         // no lookup: the model answered directly
@@ -770,7 +812,9 @@ The home team comes first. Never write a score yourself — the memory supplies 
         // football question that does not name the venue is answered for
         // BOTH legs (home and away fixtures are different stored facts).
         const keys = [];
-        if (mounted === 2 || mounted === 3) {
+        if (mounted === 4 || mounted === 5) {
+          keys.push(`${canonCat(lastLine)} | ${attr} |`);
+        } else if (mounted === 2 || mounted === 3) {
           keys.push(`${canonCity(lastLine)} | ${attr} |`);
         } else {
           const shard = currentShard();
@@ -809,9 +853,15 @@ The home team comes first. Never write a score yourself — the memory supplies 
             (verdict ? `<span class="prov ${verdict.cls}">${verdict.text}</span>` : '');
           results.push({ canonical, value, ok: !!(verdict && verdict.ok) });
         }
-        // pass 3: the model phrases the memory's answer(s)
+        // pass 3: the model phrases the memory's answer(s) — for policy, it DECIDES
         const verified = results.filter((r) => r.ok);
-        const note = verified.length
+        const note = isPolicy()
+          ? (verified.length
+              ? `The mounted ${POLICY_LABEL()} expense policy gives this reimbursement limit (GBP): ` +
+                verified.map((r) => `"${r.canonical}" → £${r.value}`).join('; ') +
+                `. Looking at the amount in my question, decide in one sentence whether the expense is WITHIN or OVER this policy limit, and by how much. A limit of £0 means the category is not reimbursable. Use only this limit; do not invent other figures.`
+              : `The ${POLICY_LABEL()} policy memory returned no limit for ${results.map((r) => `"${r.canonical}"`).join(' or ')}. Say you could not find that category in the mounted policy.`)
+          : verified.length
           ? `Memory results (verified stored facts): ` +
             verified.map((r) => `"${r.canonical}" → ${r.value}`).join('; ') +
             `. Answer my question in one or two sentences using exactly these values` +
@@ -839,6 +889,11 @@ The home team comes first. Never write a score yourself — the memory supplies 
     1: ['how did Arsenal do at home to Tottenham?', 'what was Leicester v Tottenham?'],
     2: ['what is the population of Nairobi?', 'how many people live in manchester in england',
         'population of Nanjing', 'tell me a joke'],
+    3: ['what is the population of Lewis Crawford?', 'what is the population of Tokyo?'],
+    4: ['Can I expense a £200 client entertainment dinner?', 'Is a £60 taxi within policy?',
+        'Can I claim £45 for alcohol?', 'Is £300 a night for a hotel OK?'],
+    5: ['Can I expense a £200 client entertainment dinner?', 'Is a £60 taxi within policy?',
+        'Can I claim £45 for alcohol?', 'Is £300 a night for a hotel OK?'],
   };
   function renderChatSamples() {
     const box = $('chat-samples');
